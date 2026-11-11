@@ -1,0 +1,15 @@
+[package]
+name = "mc-jobs"
+description = "PostgreSQL-backed job queue for Music Cloud"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+mc-core.workspace = true
+mc-db.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+uuid.workspace = true

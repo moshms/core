@@ -1,0 +1,24 @@
+[package]
+name = "mc-scanner"
+description = "Library scanning and indexing for Music Cloud"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+blake3.workspace = true
+futures-util.workspace = true
+mc-core.workspace = true
+mc-db.workspace = true
+mc-media.workspace = true
+mc-storage.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+sqlx.workspace = true
+tempfile.workspace = true
+tokio.workspace = true

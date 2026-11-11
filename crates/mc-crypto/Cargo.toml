@@ -1,0 +1,14 @@
+[package]
+name = "mc-crypto"
+description = "Secret encryption helpers for Music Cloud"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+base64.workspace = true
+chacha20poly1305.workspace = true
+hex.workspace = true
+mc-core.workspace = true
+rand.workspace = true

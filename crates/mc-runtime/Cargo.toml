@@ -1,0 +1,16 @@
+[package]
+name = "mc-runtime"
+description = "Shared storage registry and configuration for Music Cloud services"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+mc-core.workspace = true
+mc-crypto.workspace = true
+mc-db.workspace = true
+mc-storage.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+uuid.workspace = true

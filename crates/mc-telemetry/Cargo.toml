@@ -1,0 +1,22 @@
+[package]
+name = "mc-telemetry"
+description = "Logging and health endpoints for Music Cloud services"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+metrics = ["dep:metrics", "dep:metrics-exporter-prometheus"]
+
+[dependencies]
+async-trait.workspace = true
+axum.workspace = true
+metrics = { workspace = true, optional = true }
+metrics-exporter-prometheus = { workspace = true, optional = true }
+serde.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

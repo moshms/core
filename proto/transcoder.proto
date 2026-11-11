@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package musiccloud.transcoder.v1;
+
+service Transcoder {
+  rpc Transcode(TranscodeRequest) returns (stream TranscodeChunk);
+}
+
+message TranscodeRequest {
+  string source_key = 1;
+  string format = 2;
+  uint32 bitrate_kbps = 3;
+}
+
+message TranscodeChunk {
+  bytes data = 1;
+  string content_type = 2;
+}

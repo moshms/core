@@ -1,0 +1,22 @@
+[package]
+name = "mc-storage"
+description = "Storage abstraction and backends for Music Cloud"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+async-stream.workspace = true
+async-trait.workspace = true
+bytes.workspace = true
+futures-util.workspace = true
+mc-core.workspace = true
+opendal.workspace = true
+opendal-http-transport-reqwest.workspace = true
+rustls.workspace = true
+serde.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -1,0 +1,63 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/moshms/core"
+
+[workspace.dependencies]
+mc-auth = { path = "crates/mc-auth" }
+mc-core = { path = "crates/mc-core" }
+mc-crypto = { path = "crates/mc-crypto" }
+mc-db = { path = "crates/mc-db" }
+mc-jobs = { path = "crates/mc-jobs" }
+mc-media = { path = "crates/mc-media" }
+mc-proto = { path = "crates/mc-proto" }
+mc-runtime = { path = "crates/mc-runtime" }
+mc-scanner = { path = "crates/mc-scanner" }
+mc-storage = { path = "crates/mc-storage" }
+mc-telemetry = { path = "crates/mc-telemetry" }
+
+anyhow = "1"
+argon2 = "0.5"
+base64 = "0.23"
+chacha20poly1305 = "0.11"
+async-stream = "0.3"
+async-trait = "0.1"
+axum = "0.8"
+blake3 = "1"
+bytes = "1"
+clap = { version = "4", features = ["derive"] }
+figment = { version = "0.10", features = ["env"] }
+form_urlencoded = "1"
+futures-util = "0.3"
+hex = "0.4"
+lofty = "0.25"
+metrics = "0.24"
+metrics-exporter-prometheus = "0.18"
+notify = "8"
+opendal-http-transport-reqwest = { version = "0.59", default-features = false, features = ["rustls-no-provider"] }
+opendal = { version = "0.59", default-features = false, features = ["services-s3", "executors-tokio", "http-transport-reqwest-rustls-no-provider", "layers-concurrent-limit", "layers-retry", "layers-timeout"] }
+prost = "0.14"
+protoc-bin-vendored = "3"
+md-5 = "0.10"
+rand = "0.8"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "migrate", "macros", "uuid", "json"] }
+tempfile = "3"
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "time", "fs", "io-util", "sync", "process"] }
+tokio-stream = { version = "0.1", features = ["net", "sync"] }
+tonic = "0.14"
+tonic-health = "0.14"
+tonic-prost = "0.14"
+tonic-prost-build = "0.14"
+tower-http = { version = "0.6", features = ["trace", "timeout", "set-header"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+uuid = { version = "1", features = ["v7", "serde"] }
