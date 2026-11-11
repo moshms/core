@@ -152,6 +152,14 @@ impl Scanner {
             .cloned()
             .collect::<Vec<_>>();
         stats.removed = media_files::mark_missing(&self.pool, library.id, &removed).await?;
+        let removed_albums = albums::delete_empty(&self.pool).await?;
+        let removed_artists = artists::delete_empty(&self.pool).await?;
+        if removed_albums > 0 || removed_artists > 0 {
+            info!(
+                removed_albums,
+                removed_artists, "removed empty catalog entries"
+            );
+        }
 
         info!(?stats, "scan finished");
         Ok(stats)

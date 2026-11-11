@@ -17,3 +17,16 @@ pub async fn upsert(pool: &PgPool, name: &str) -> Result<Uuid> {
     .await
     .map_err(|error| db_error("upsert artist", error))
 }
+
+pub async fn delete_empty(pool: &PgPool) -> Result<u64> {
+    let result = sqlx::query(
+        "DELETE FROM artists ar
+         WHERE NOT EXISTS (SELECT 1 FROM albums al WHERE al.album_artist_id = ar.id)
+           AND NOT EXISTS (SELECT 1 FROM track_artists ta WHERE ta.artist_id = ar.id)",
+    )
+    .execute(pool)
+    .await
+    .map_err(|error| db_error("delete empty artists", error))?;
+
+    Ok(result.rows_affected())
+}
