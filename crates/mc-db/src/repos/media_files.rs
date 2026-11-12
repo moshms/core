@@ -158,3 +158,24 @@ pub async fn delete_by_key(pool: &PgPool, library_id: Uuid, key: &str) -> Result
 
     Ok(result.rows_affected())
 }
+
+pub async fn set_uploaded_by(
+    pool: &PgPool,
+    library_id: Uuid,
+    key: &str,
+    user_id: Uuid,
+) -> Result<u64> {
+    let result = sqlx::query(
+        "UPDATE media_files
+         SET uploaded_by = $3, updated_at = now()
+         WHERE library_id = $1 AND key = $2",
+    )
+    .bind(library_id)
+    .bind(key)
+    .bind(user_id)
+    .execute(pool)
+    .await
+    .map_err(|error| db_error("set media file uploader", error))?;
+
+    Ok(result.rows_affected())
+}
