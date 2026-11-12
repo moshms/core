@@ -11,6 +11,7 @@ pub struct PlaylistRecord {
     pub id: Uuid,
     pub name: String,
     pub owner: String,
+    pub owner_id: Uuid,
     pub is_public: bool,
     pub song_count: i64,
     pub duration_ms: i64,
@@ -20,31 +21,41 @@ pub struct PlaylistRecord {
 pub struct PlaylistDetail {
     pub playlist: PlaylistRecord,
     pub tracks: Vec<TrackSummary>,
+    pub hidden_count: i64,
 }
 
 const PLAYLIST_COLUMNS: &str = "
     p.id,
     p.name,
     u.username AS owner,
+    p.owner_id,
     p.is_public,
-    (SELECT count(*) FROM playlist_entries pe WHERE pe.playlist_id = p.id) AS song_count,
+    (SELECT count(*)
+     FROM playlist_entries pe
+     JOIN tracks t ON t.id = pe.track_id
+     JOIN media_files mf ON mf.id = t.primary_file_id
+     WHERE pe.playlist_id = p.id
+       AND mf.library_id = ANY($1)
+       AND mf.scan_state = 'indexed') AS song_count,
     (SELECT COALESCE(sum(t.duration_ms), 0)::bigint
      FROM playlist_entries pe
      JOIN tracks t ON t.id = pe.track_id
-     WHERE pe.playlist_id = p.id) AS duration_ms
+     JOIN media_files mf ON mf.id = t.primary_file_id
+     WHERE pe.playlist_id = p.id
+       AND mf.library_id = ANY($1)
+       AND mf.scan_state = 'indexed') AS duration_ms
 ";
 
-pub async fn list(pool: &PgPool, user_id: Uuid) -> Result<Vec<PlaylistRecord>> {
+pub async fn list_with_counts(pool: &PgPool, visible: &[Uuid]) -> Result<Vec<PlaylistRecord>> {
     let query = format!(
         "SELECT {PLAYLIST_COLUMNS}
          FROM playlists p
          JOIN users u ON u.id = p.owner_id
-         WHERE p.owner_id = $1 OR p.is_public
          ORDER BY lower(p.name)"
     );
 
     sqlx::query_as::<_, PlaylistRecord>(&query)
-        .bind(user_id)
+        .bind(visible)
         .fetch_all(pool)
         .await
         .map_err(|error| db_error("list playlists", error))
@@ -52,19 +63,19 @@ pub async fn list(pool: &PgPool, user_id: Uuid) -> Result<Vec<PlaylistRecord>> {
 
 pub async fn get(
     pool: &PgPool,
-    user_id: Uuid,
     playlist_id: Uuid,
+    visible: &[Uuid],
 ) -> Result<Option<PlaylistDetail>> {
-    let playlist_query = format!(
+    let query = format!(
         "SELECT {PLAYLIST_COLUMNS}
          FROM playlists p
          JOIN users u ON u.id = p.owner_id
-         WHERE p.id = $1 AND (p.owner_id = $2 OR p.is_public)"
+         WHERE p.id = $2"
     );
 
-    let Some(playlist) = sqlx::query_as::<_, PlaylistRecord>(&playlist_query)
+    let Some(playlist) = sqlx::query_as::<_, PlaylistRecord>(&query)
+        .bind(visible)
         .bind(playlist_id)
-        .bind(user_id)
         .fetch_optional(pool)
         .await
         .map_err(|error| db_error("load playlist", error))?
@@ -82,6 +93,8 @@ pub async fn get(
              mf.key AS file_key,
              mf.size,
              mf.format,
+             mf.library_id,
+             mf.uploaded_by,
              al.id AS album_id,
              al.title AS album,
              ar.name AS album_artist,
@@ -96,15 +109,36 @@ pub async fn get(
          JOIN media_files mf ON mf.id = t.primary_file_id
          LEFT JOIN albums al ON al.id = t.album_id
          LEFT JOIN artists ar ON ar.id = al.album_artist_id
-         WHERE pe.playlist_id = $1
+         WHERE pe.playlist_id = $2
+           AND mf.library_id = ANY($1)
+           AND mf.scan_state = 'indexed'
          ORDER BY pe.position",
     )
+    .bind(visible)
     .bind(playlist_id)
     .fetch_all(pool)
     .await
     .map_err(|error| db_error("load playlist tracks", error))?;
 
-    Ok(Some(PlaylistDetail { playlist, tracks }))
+    let hidden_count = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*)
+         FROM playlist_entries pe
+         JOIN tracks t ON t.id = pe.track_id
+         JOIN media_files mf ON mf.id = t.primary_file_id
+         WHERE pe.playlist_id = $2
+           AND NOT (mf.library_id = ANY($1) AND mf.scan_state = 'indexed')",
+    )
+    .bind(visible)
+    .bind(playlist_id)
+    .fetch_one(pool)
+    .await
+    .map_err(|error| db_error("count hidden playlist tracks", error))?;
+
+    Ok(Some(PlaylistDetail {
+        playlist,
+        tracks,
+        hidden_count,
+    }))
 }
 
 pub async fn create(pool: &PgPool, owner_id: Uuid, name: &str, track_ids: &[Uuid]) -> Result<Uuid> {
@@ -134,7 +168,6 @@ pub async fn create(pool: &PgPool, owner_id: Uuid, name: &str, track_ids: &[Uuid
 
 pub async fn update(
     pool: &PgPool,
-    owner_id: Uuid,
     playlist_id: Uuid,
     name: Option<&str>,
     is_public: Option<bool>,
@@ -146,16 +179,14 @@ pub async fn update(
         .await
         .map_err(|error| db_error("begin playlist update transaction", error))?;
 
-    let owned = sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS(SELECT 1 FROM playlists WHERE id = $1 AND owner_id = $2)",
-    )
-    .bind(playlist_id)
-    .bind(owner_id)
-    .fetch_one(&mut *transaction)
-    .await
-    .map_err(|error| db_error("check playlist owner", error))?;
+    let exists =
+        sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM playlists WHERE id = $1)")
+            .bind(playlist_id)
+            .fetch_one(&mut *transaction)
+            .await
+            .map_err(|error| db_error("check playlist", error))?;
 
-    if !owned {
+    if !exists {
         transaction
             .rollback()
             .await
@@ -220,10 +251,9 @@ pub async fn update(
     Ok(true)
 }
 
-pub async fn delete(pool: &PgPool, owner_id: Uuid, playlist_id: Uuid) -> Result<bool> {
-    let result = sqlx::query("DELETE FROM playlists WHERE id = $1 AND owner_id = $2")
+pub async fn delete(pool: &PgPool, playlist_id: Uuid) -> Result<bool> {
+    let result = sqlx::query("DELETE FROM playlists WHERE id = $1")
         .bind(playlist_id)
-        .bind(owner_id)
         .execute(pool)
         .await
         .map_err(|error| db_error("delete playlist", error))?;

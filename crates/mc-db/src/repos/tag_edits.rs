@@ -68,6 +68,21 @@ pub async fn list(pool: &PgPool, limit: i64) -> Result<Vec<TagEditRecord>> {
     .map_err(|error| db_error("list tag edits", error))
 }
 
+pub async fn list_for_user(pool: &PgPool, user_id: Uuid, limit: i64) -> Result<Vec<TagEditRecord>> {
+    sqlx::query_as::<_, TagEditRecord>(
+        "SELECT id, user_id, track_ids, changes, artwork_mime, artwork_data, status, error
+         FROM tag_edits
+         WHERE user_id = $1
+         ORDER BY created_at DESC
+         LIMIT $2",
+    )
+    .bind(user_id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .map_err(|error| db_error("list user tag edits", error))
+}
+
 pub async fn set_status(pool: &PgPool, id: Uuid, status: &str) -> Result<()> {
     sqlx::query("UPDATE tag_edits SET status = $2, updated_at = now() WHERE id = $1")
         .bind(id)
