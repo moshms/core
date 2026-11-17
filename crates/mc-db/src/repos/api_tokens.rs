@@ -18,7 +18,6 @@ pub struct ApiTokenRecord {
 pub struct ApiTokenUser {
     pub user_id: Uuid,
     pub username: String,
-    pub role: String,
     pub subsonic_secret: String,
 }
 
@@ -50,7 +49,7 @@ pub async fn create(
 
 pub async fn find_user(pool: &PgPool, token_hash: &str) -> Result<Option<ApiTokenUser>> {
     sqlx::query_as::<_, ApiTokenUser>(
-        "SELECT u.id AS user_id, u.username, u.role, u.subsonic_secret
+        "SELECT u.id AS user_id, u.username, u.subsonic_secret
          FROM api_tokens t
          JOIN users u ON u.id = t.user_id
          WHERE t.token_hash = $1
