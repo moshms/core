@@ -1,9 +1,4 @@
 /target
-/web/node_modules
-/web/dist
 .env
-deploy/.env
-/library
 *.log
 .DS_Store
-deploy/library
