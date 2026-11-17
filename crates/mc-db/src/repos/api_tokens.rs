@@ -98,3 +98,13 @@ pub async fn delete(pool: &PgPool, user_id: Uuid, id: Uuid) -> Result<bool> {
 
     Ok(result.rows_affected() > 0)
 }
+
+pub async fn delete_for_user(pool: &PgPool, user_id: Uuid) -> Result<u64> {
+    let result = sqlx::query("DELETE FROM api_tokens WHERE user_id = $1")
+        .bind(user_id)
+        .execute(pool)
+        .await
+        .map_err(|error| db_error("delete user api tokens", error))?;
+
+    Ok(result.rows_affected())
+}
