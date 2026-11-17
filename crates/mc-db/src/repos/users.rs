@@ -9,7 +9,6 @@ use super::{db_error, db_error_unique};
 pub struct UserSummary {
     pub id: Uuid,
     pub username: String,
-    pub role: String,
     pub is_active: bool,
 }
 
@@ -19,7 +18,6 @@ pub struct UserRecord {
     pub username: String,
     pub password_hash: String,
     pub subsonic_secret: String,
-    pub role: String,
     pub is_active: bool,
 }
 
@@ -32,7 +30,7 @@ pub async fn count(pool: &PgPool) -> Result<i64> {
 
 pub async fn find_by_username(pool: &PgPool, username: &str) -> Result<Option<UserRecord>> {
     sqlx::query_as::<_, UserRecord>(
-        "SELECT id, username, password_hash, subsonic_secret, role, is_active
+        "SELECT id, username, password_hash, subsonic_secret, is_active
          FROM users
          WHERE lower(username) = lower($1)",
     )
@@ -47,18 +45,16 @@ pub async fn create(
     username: &str,
     password_hash: &str,
     subsonic_secret: &str,
-    role: &str,
 ) -> Result<UserRecord> {
     sqlx::query_as::<_, UserRecord>(
-        "INSERT INTO users (id, username, password_hash, subsonic_secret, role)
-         VALUES ($1, $2, $3, $4, $5)
-         RETURNING id, username, password_hash, subsonic_secret, role, is_active",
+        "INSERT INTO users (id, username, password_hash, subsonic_secret)
+         VALUES ($1, $2, $3, $4)
+         RETURNING id, username, password_hash, subsonic_secret, is_active",
     )
     .bind(Uuid::now_v7())
     .bind(username)
     .bind(password_hash)
     .bind(subsonic_secret)
-    .bind(role)
     .fetch_one(pool)
     .await
     .map_err(|error| db_error_unique("create user", error))
@@ -66,7 +62,7 @@ pub async fn create(
 
 pub async fn list(pool: &PgPool) -> Result<Vec<UserSummary>> {
     sqlx::query_as::<_, UserSummary>(
-        "SELECT id, username, role, is_active
+        "SELECT id, username, is_active
          FROM users
          ORDER BY lower(username)",
     )
@@ -77,7 +73,7 @@ pub async fn list(pool: &PgPool) -> Result<Vec<UserSummary>> {
 
 pub async fn get(pool: &PgPool, id: Uuid) -> Result<Option<UserRecord>> {
     sqlx::query_as::<_, UserRecord>(
-        "SELECT id, username, password_hash, subsonic_secret, role, is_active
+        "SELECT id, username, password_hash, subsonic_secret, is_active
          FROM users
          WHERE id = $1",
     )
@@ -85,17 +81,6 @@ pub async fn get(pool: &PgPool, id: Uuid) -> Result<Option<UserRecord>> {
     .fetch_optional(pool)
     .await
     .map_err(|error| db_error("load user", error))
-}
-
-pub async fn update_role(pool: &PgPool, id: Uuid, role: &str) -> Result<bool> {
-    let result = sqlx::query("UPDATE users SET role = $2, updated_at = now() WHERE id = $1")
-        .bind(id)
-        .bind(role)
-        .execute(pool)
-        .await
-        .map_err(|error| db_error("update user role", error))?;
-
-    Ok(result.rows_affected() > 0)
 }
 
 pub async fn update_active(pool: &PgPool, id: Uuid, is_active: bool) -> Result<bool> {
@@ -132,10 +117,16 @@ pub async fn delete(pool: &PgPool, id: Uuid) -> Result<bool> {
 }
 
 pub async fn count_active_admins(pool: &PgPool) -> Result<i64> {
-    sqlx::query_scalar::<_, i64>("SELECT count(*) FROM users WHERE role = 'admin' AND is_active")
-        .fetch_one(pool)
-        .await
-        .map_err(|error| db_error("count active admins", error))
+    sqlx::query_scalar::<_, i64>(
+        "SELECT count(DISTINCT u.id)
+         FROM users u
+         JOIN user_roles ur ON ur.user_id = u.id
+         JOIN roles r ON r.id = ur.role_id
+         WHERE u.is_active AND (r.permissions & 1) <> 0",
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(|error| db_error("count active admins", error))
 }
 
 pub async fn update_subsonic_secret(

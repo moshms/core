@@ -18,7 +18,6 @@ pub struct SessionRecord {
 pub struct SessionUser {
     pub user_id: Uuid,
     pub username: String,
-    pub role: String,
     pub subsonic_secret: String,
 }
 
@@ -49,7 +48,7 @@ pub async fn create(
 
 pub async fn find_active(pool: &PgPool, token_hash: &str) -> Result<Option<SessionUser>> {
     sqlx::query_as::<_, SessionUser>(
-        "SELECT u.id AS user_id, u.username, u.role, u.subsonic_secret
+        "SELECT u.id AS user_id, u.username, u.subsonic_secret
          FROM sessions s
          JOIN users u ON u.id = s.user_id
          WHERE s.token_hash = $1 AND s.expires_at > now() AND u.is_active",
