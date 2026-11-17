@@ -4,7 +4,7 @@ use std::time::Duration;
 use async_stream::try_stream;
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures_util::TryStreamExt;
+use futures_util::{StreamExt, TryStreamExt};
 use mc_core::{CoreError, Result, StorageId};
 use opendal::services::S3;
 use opendal::{ErrorKind, Metadata, Operator};
@@ -164,6 +164,30 @@ impl Storage for S3Storage {
             .map_err(|error| opendal_error("write object", error))?;
 
         self.stat(key).await
+    }
+
+    async fn write_stream(
+        &self,
+        key: &Key,
+        mut stream: futures_util::stream::BoxStream<'static, Result<Bytes>>,
+    ) -> Result<Meta> {
+        let mut writer = self
+            .operator
+            .writer(key.as_str())
+            .await
+            .map_err(|error| opendal_error("open object writer", error))?;
+        while let Some(chunk) = stream.next().await {
+            writer
+                .write(chunk?)
+                .await
+                .map_err(|error| opendal_error("write object stream", error))?;
+        }
+        let metadata = writer
+            .close()
+            .await
+            .map_err(|error| opendal_error("close object writer", error))?;
+
+        Ok(meta_from_opendal(&metadata))
     }
 
     async fn rename(&self, from: &Key, to: &Key) -> Result<()> {
