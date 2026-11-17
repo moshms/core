@@ -1,6 +1,6 @@
 use mc_core::Result;
 use serde::Serialize;
-use sqlx::PgPool;
+use sqlx::{Executor, PgPool, Postgres};
 use uuid::Uuid;
 
 use super::{db_error, db_error_unique};
@@ -40,12 +40,15 @@ pub async fn find_by_username(pool: &PgPool, username: &str) -> Result<Option<Us
     .map_err(|error| db_error("load user", error))
 }
 
-pub async fn create(
-    pool: &PgPool,
+pub async fn create<'e, E>(
+    executor: E,
     username: &str,
     password_hash: &str,
     subsonic_secret: &str,
-) -> Result<UserRecord> {
+) -> Result<UserRecord>
+where
+    E: Executor<'e, Database = Postgres>,
+{
     sqlx::query_as::<_, UserRecord>(
         "INSERT INTO users (id, username, password_hash, subsonic_secret)
          VALUES ($1, $2, $3, $4)
@@ -55,7 +58,7 @@ pub async fn create(
     .bind(username)
     .bind(password_hash)
     .bind(subsonic_secret)
-    .fetch_one(pool)
+    .fetch_one(executor)
     .await
     .map_err(|error| db_error_unique("create user", error))
 }
@@ -83,33 +86,42 @@ pub async fn get(pool: &PgPool, id: Uuid) -> Result<Option<UserRecord>> {
     .map_err(|error| db_error("load user", error))
 }
 
-pub async fn update_active(pool: &PgPool, id: Uuid, is_active: bool) -> Result<bool> {
+pub async fn update_active<'e, E>(executor: E, id: Uuid, is_active: bool) -> Result<bool>
+where
+    E: Executor<'e, Database = Postgres>,
+{
     let result = sqlx::query("UPDATE users SET is_active = $2, updated_at = now() WHERE id = $1")
         .bind(id)
         .bind(is_active)
-        .execute(pool)
+        .execute(executor)
         .await
         .map_err(|error| db_error("update user activity", error))?;
 
     Ok(result.rows_affected() > 0)
 }
 
-pub async fn update_password(pool: &PgPool, id: Uuid, password_hash: &str) -> Result<bool> {
+pub async fn update_password<'e, E>(executor: E, id: Uuid, password_hash: &str) -> Result<bool>
+where
+    E: Executor<'e, Database = Postgres>,
+{
     let result =
         sqlx::query("UPDATE users SET password_hash = $2, updated_at = now() WHERE id = $1")
             .bind(id)
             .bind(password_hash)
-            .execute(pool)
+            .execute(executor)
             .await
             .map_err(|error| db_error("update user password", error))?;
 
     Ok(result.rows_affected() > 0)
 }
 
-pub async fn delete(pool: &PgPool, id: Uuid) -> Result<bool> {
+pub async fn delete<'e, E>(executor: E, id: Uuid) -> Result<bool>
+where
+    E: Executor<'e, Database = Postgres>,
+{
     let result = sqlx::query("DELETE FROM users WHERE id = $1")
         .bind(id)
-        .execute(pool)
+        .execute(executor)
         .await
         .map_err(|error| db_error("delete user", error))?;
 
