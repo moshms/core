@@ -9,7 +9,7 @@ use bytes::Bytes;
 use futures_util::StreamExt;
 use mc_core::{CoreError, Result, StorageId};
 use tokio::fs;
-use tokio::io::{AsyncReadExt, AsyncSeekExt, SeekFrom};
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, SeekFrom};
 
 use crate::{Caps, Delivery, Entry, EntryStream, Key, Meta, Storage};
 
@@ -226,6 +226,35 @@ impl Storage for LocalStorage {
         fs::write(&path, &data)
             .await
             .map_err(|error| io_error("write", &path, error))?;
+
+        self.stat(key).await
+    }
+
+    async fn write_stream(
+        &self,
+        key: &Key,
+        mut stream: futures_util::stream::BoxStream<'static, Result<Bytes>>,
+    ) -> Result<Meta> {
+        use futures_util::StreamExt;
+
+        let path = self.resolve(key)?;
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)
+                .await
+                .map_err(|error| io_error("create directory", parent, error))?;
+        }
+        let mut file = fs::File::create(&path)
+            .await
+            .map_err(|error| io_error("create", &path, error))?;
+        while let Some(chunk) = stream.next().await {
+            file.write_all(&chunk?)
+                .await
+                .map_err(|error| io_error("write", &path, error))?;
+        }
+        file.flush()
+            .await
+            .map_err(|error| io_error("flush", &path, error))?;
+        drop(file);
 
         self.stat(key).await
     }

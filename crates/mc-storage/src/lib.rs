@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures_util::stream::BoxStream;
+use futures_util::stream::{BoxStream, StreamExt};
 use mc_core::{Result, StorageId};
 use serde::{Deserialize, Serialize};
 
@@ -58,6 +58,17 @@ pub trait Storage: Send + Sync {
     async fn read_range(&self, key: &Key, range: Range<u64>) -> Result<Bytes>;
     async fn read(&self, key: &Key) -> Result<Bytes>;
     async fn write(&self, key: &Key, data: Bytes) -> Result<Meta>;
+    async fn write_stream(
+        &self,
+        key: &Key,
+        mut stream: BoxStream<'static, Result<Bytes>>,
+    ) -> Result<Meta> {
+        let mut data = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            data.extend_from_slice(&chunk?);
+        }
+        self.write(key, Bytes::from(data)).await
+    }
     async fn rename(&self, from: &Key, to: &Key) -> Result<()>;
     async fn delete(&self, key: &Key) -> Result<()>;
     async fn delivery(&self, key: &Key) -> Result<Delivery>;
