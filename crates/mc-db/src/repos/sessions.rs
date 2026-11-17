@@ -51,11 +51,15 @@ pub async fn find_active(pool: &PgPool, token_hash: &str) -> Result<Option<Sessi
 }
 
 pub async fn touch(pool: &PgPool, token_hash: &str) -> Result<()> {
-    sqlx::query("UPDATE sessions SET last_seen_at = now() WHERE token_hash = $1")
-        .bind(token_hash)
-        .execute(pool)
-        .await
-        .map_err(|error| db_error("touch session", error))?;
+    sqlx::query(
+        "UPDATE sessions SET last_seen_at = now()
+         WHERE token_hash = $1
+           AND last_seen_at < now() - interval '5 minutes'",
+    )
+    .bind(token_hash)
+    .execute(pool)
+    .await
+    .map_err(|error| db_error("touch session", error))?;
 
     Ok(())
 }
