@@ -92,6 +92,7 @@ pub struct SearchResults {
 pub struct ArtworkRecord {
     pub mime: String,
     pub data: Vec<u8>,
+    pub etag: String,
 }
 
 const TRACK_COLUMNS: &str = "
@@ -492,7 +493,7 @@ pub async fn get_album_artwork(
     visible: &[Uuid],
 ) -> Result<Option<ArtworkRecord>> {
     sqlx::query_as::<_, ArtworkRecord>(
-        "SELECT aw.mime, aw.data
+        "SELECT aw.mime, aw.data, aw.hash AS etag
          FROM albums al
          JOIN artworks aw ON aw.id = al.artwork_id
          WHERE al.id = $2
