@@ -26,7 +26,10 @@ const ROLE_COLUMNS: &str = "
     (SELECT count(*) FROM user_roles ur WHERE ur.role_id = r.id) AS member_count
 ";
 
-pub async fn list(pool: &PgPool) -> Result<Vec<RoleRecord>> {
+pub async fn list<'e, E>(executor: E) -> Result<Vec<RoleRecord>>
+where
+    E: Executor<'e, Database = Postgres>,
+{
     let query = format!(
         "SELECT {ROLE_COLUMNS}
          FROM roles r
@@ -34,7 +37,7 @@ pub async fn list(pool: &PgPool) -> Result<Vec<RoleRecord>> {
     );
 
     sqlx::query_as::<_, RoleRecord>(&query)
-        .fetch_all(pool)
+        .fetch_all(executor)
         .await
         .map_err(|error| db_error("list roles", error))
 }
