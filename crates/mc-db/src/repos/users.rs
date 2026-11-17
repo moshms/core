@@ -137,3 +137,19 @@ pub async fn count_active_admins(pool: &PgPool) -> Result<i64> {
         .await
         .map_err(|error| db_error("count active admins", error))
 }
+
+pub async fn update_subsonic_secret(
+    pool: &PgPool,
+    id: Uuid,
+    subsonic_secret: &str,
+) -> Result<bool> {
+    let result =
+        sqlx::query("UPDATE users SET subsonic_secret = $2, updated_at = now() WHERE id = $1")
+            .bind(id)
+            .bind(subsonic_secret)
+            .execute(pool)
+            .await
+            .map_err(|error| db_error("update subsonic secret", error))?;
+
+    Ok(result.rows_affected() > 0)
+}

@@ -627,3 +627,30 @@ pub async fn starred_artists(
         .await
         .map_err(|error| db_error("load starred artists", error))
 }
+
+pub async fn list_artist_tracks(
+    pool: &PgPool,
+    artist_id: Uuid,
+    visible: &[Uuid],
+    limit: i64,
+) -> Result<Vec<TrackSummary>> {
+    let query = format!(
+        "SELECT DISTINCT {TRACK_COLUMNS}
+         FROM track_artists ta
+         JOIN tracks t ON t.id = ta.track_id
+         JOIN media_files mf ON mf.id = t.primary_file_id
+         LEFT JOIN albums al ON al.id = t.album_id
+         LEFT JOIN artists ar ON ar.id = al.album_artist_id
+         WHERE ta.artist_id = $2 AND {VISIBLE_TRACK}
+         ORDER BY lower(t.title), t.disc_no, t.track_no
+         LIMIT $3"
+    );
+
+    sqlx::query_as::<_, TrackSummary>(&query)
+        .bind(visible)
+        .bind(artist_id)
+        .bind(limit)
+        .fetch_all(pool)
+        .await
+        .map_err(|error| db_error("list artist tracks", error))
+}
