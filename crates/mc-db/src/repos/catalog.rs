@@ -120,6 +120,15 @@ const TRACK_COLUMNS: &str = "
 const VISIBLE_TRACK: &str = "mf.library_id = ANY($1) AND mf.scan_state = 'indexed'";
 
 pub async fn list_artists(pool: &PgPool, visible: &[Uuid]) -> Result<Vec<ArtistSummary>> {
+    list_artists_page(pool, visible, None, 0).await
+}
+
+pub async fn list_artists_page(
+    pool: &PgPool,
+    visible: &[Uuid],
+    limit: Option<i64>,
+    offset: i64,
+) -> Result<Vec<ArtistSummary>> {
     let query = "SELECT
              ar.id,
              ar.name,
@@ -147,14 +156,37 @@ pub async fn list_artists(pool: &PgPool, visible: &[Uuid]) -> Result<Vec<ArtistS
                AND mf.library_id = ANY($1)
                AND mf.scan_state = 'indexed'
          )
-         ORDER BY lower(ar.name)"
+         ORDER BY lower(ar.name)
+         LIMIT $2 OFFSET $3"
         .to_string();
 
     sqlx::query_as::<_, ArtistSummary>(&query)
         .bind(visible)
+        .bind(limit)
+        .bind(offset)
         .fetch_all(pool)
         .await
         .map_err(|error| db_error("list artists", error))
+}
+
+pub async fn count_artists(pool: &PgPool, visible: &[Uuid]) -> Result<i64> {
+    sqlx::query_scalar::<_, i64>(
+        "SELECT count(*)
+         FROM artists ar
+         WHERE EXISTS (
+             SELECT 1
+             FROM track_artists ta
+             JOIN tracks t ON t.id = ta.track_id
+             JOIN media_files mf ON mf.id = t.primary_file_id
+             WHERE ta.artist_id = ar.id
+               AND mf.library_id = ANY($1)
+               AND mf.scan_state = 'indexed'
+         )",
+    )
+    .bind(visible)
+    .fetch_one(pool)
+    .await
+    .map_err(|error| db_error("count artists", error))
 }
 
 pub async fn list_albums(
@@ -162,7 +194,24 @@ pub async fn list_albums(
     artist_id: Option<Uuid>,
     visible: &[Uuid],
 ) -> Result<Vec<AlbumSummary>> {
-    let query = "SELECT
+    list_albums_page(pool, artist_id, visible, None, 0, "artist").await
+}
+
+pub async fn list_albums_page(
+    pool: &PgPool,
+    artist_id: Option<Uuid>,
+    visible: &[Uuid],
+    limit: Option<i64>,
+    offset: i64,
+    sort: &str,
+) -> Result<Vec<AlbumSummary>> {
+    let order = match sort {
+        "name" => "lower(al.title), lower(ar.name)",
+        "year" => "al.year DESC NULLS LAST, lower(al.title)",
+        _ => "lower(ar.name), al.year, lower(al.title)",
+    };
+    let query = format!(
+        "SELECT
              al.id,
              al.title,
              al.year,
@@ -192,15 +241,39 @@ pub async fn list_albums(
                  AND mf.library_id = ANY($2)
                  AND mf.scan_state = 'indexed'
            )
-         ORDER BY lower(ar.name), al.year, lower(al.title)"
-        .to_string();
+         ORDER BY {order}
+         LIMIT $3 OFFSET $4"
+    );
 
     sqlx::query_as::<_, AlbumSummary>(&query)
         .bind(artist_id)
         .bind(visible)
+        .bind(limit)
+        .bind(offset)
         .fetch_all(pool)
         .await
         .map_err(|error| db_error("list albums", error))
+}
+
+pub async fn count_albums(pool: &PgPool, artist_id: Option<Uuid>, visible: &[Uuid]) -> Result<i64> {
+    sqlx::query_scalar::<_, i64>(
+        "SELECT count(*)
+         FROM albums al
+         WHERE ($1::uuid IS NULL OR al.album_artist_id = $1)
+           AND EXISTS (
+               SELECT 1
+               FROM tracks t
+               JOIN media_files mf ON mf.id = t.primary_file_id
+               WHERE t.album_id = al.id
+                 AND mf.library_id = ANY($2)
+                 AND mf.scan_state = 'indexed'
+           )",
+    )
+    .bind(artist_id)
+    .bind(visible)
+    .fetch_one(pool)
+    .await
+    .map_err(|error| db_error("count albums", error))
 }
 
 pub async fn get_artist(
@@ -635,6 +708,16 @@ pub async fn list_artist_tracks(
     visible: &[Uuid],
     limit: i64,
 ) -> Result<Vec<TrackSummary>> {
+    list_artist_tracks_page(pool, artist_id, visible, limit, 0).await
+}
+
+pub async fn list_artist_tracks_page(
+    pool: &PgPool,
+    artist_id: Uuid,
+    visible: &[Uuid],
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<TrackSummary>> {
     let query = format!(
         "SELECT {TRACK_COLUMNS}
          FROM track_artists ta
@@ -644,13 +727,14 @@ pub async fn list_artist_tracks(
          LEFT JOIN artists ar ON ar.id = al.album_artist_id
          WHERE ta.artist_id = $2 AND {VISIBLE_TRACK}
          ORDER BY lower(t.title), t.disc_no, t.track_no
-         LIMIT $3"
+         LIMIT $3 OFFSET $4"
     );
 
     sqlx::query_as::<_, TrackSummary>(&query)
         .bind(visible)
         .bind(artist_id)
         .bind(limit)
+        .bind(offset)
         .fetch_all(pool)
         .await
         .map_err(|error| db_error("list artist tracks", error))
