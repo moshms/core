@@ -635,7 +635,7 @@ pub async fn list_artist_tracks(
     limit: i64,
 ) -> Result<Vec<TrackSummary>> {
     let query = format!(
-        "SELECT DISTINCT {TRACK_COLUMNS}
+        "SELECT {TRACK_COLUMNS}
          FROM track_artists ta
          JOIN tracks t ON t.id = ta.track_id
          JOIN media_files mf ON mf.id = t.primary_file_id
