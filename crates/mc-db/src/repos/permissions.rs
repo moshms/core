@@ -1,6 +1,6 @@
 use mc_core::Result;
 use serde::Serialize;
-use sqlx::PgPool;
+use sqlx::{Executor, PgPool, Postgres};
 use uuid::Uuid;
 
 use super::db_error;
@@ -56,15 +56,18 @@ pub async fn list_for_user(
     .map_err(|error| db_error("list user permission overwrites", error))
 }
 
-pub async fn upsert(
-    pool: &PgPool,
+pub async fn upsert<'e, E>(
+    executor: E,
     resource_type: &str,
     resource_id: Uuid,
     target_type: &str,
     target_id: Uuid,
     allow: i64,
     deny: i64,
-) -> Result<OverwriteRecord> {
+) -> Result<OverwriteRecord>
+where
+    E: Executor<'e, Database = Postgres>,
+{
     sqlx::query_as::<_, OverwriteRecord>(
         "INSERT INTO permission_overwrites
              (resource_type, resource_id, target_type, target_id, allow, deny)
@@ -79,18 +82,21 @@ pub async fn upsert(
     .bind(target_id)
     .bind(allow)
     .bind(deny)
-    .fetch_one(pool)
+    .fetch_one(executor)
     .await
     .map_err(|error| db_error("upsert permission overwrite", error))
 }
 
-pub async fn delete(
-    pool: &PgPool,
+pub async fn delete<'e, E>(
+    executor: E,
     resource_type: &str,
     resource_id: Uuid,
     target_type: &str,
     target_id: Uuid,
-) -> Result<bool> {
+) -> Result<bool>
+where
+    E: Executor<'e, Database = Postgres>,
+{
     let result = sqlx::query(
         "DELETE FROM permission_overwrites
          WHERE resource_type = $1 AND resource_id = $2
@@ -100,7 +106,7 @@ pub async fn delete(
     .bind(resource_id)
     .bind(target_type)
     .bind(target_id)
-    .execute(pool)
+    .execute(executor)
     .await
     .map_err(|error| db_error("delete permission overwrite", error))?;
 

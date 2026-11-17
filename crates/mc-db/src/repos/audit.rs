@@ -1,7 +1,7 @@
 use mc_core::Result;
 use serde::Serialize;
 use serde_json::Value;
-use sqlx::PgPool;
+use sqlx::{Executor, PgPool, Postgres};
 use uuid::Uuid;
 
 use super::db_error;
@@ -17,14 +17,17 @@ pub struct AuditRecord {
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
-pub async fn log(
-    pool: &PgPool,
+pub async fn log<'e, E>(
+    executor: E,
     actor_id: Option<Uuid>,
     action: &str,
     target_type: &str,
     target_id: Option<Uuid>,
     changes: Value,
-) -> Result<()> {
+) -> Result<()>
+where
+    E: Executor<'e, Database = Postgres>,
+{
     sqlx::query(
         "INSERT INTO audit_log (id, actor_id, action, target_type, target_id, changes)
          VALUES ($1, $2, $3, $4, $5, $6)",
@@ -35,7 +38,7 @@ pub async fn log(
     .bind(target_type)
     .bind(target_id)
     .bind(changes)
-    .execute(pool)
+    .execute(executor)
     .await
     .map_err(|error| db_error("write audit log", error))?;
 

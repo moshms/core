@@ -1,6 +1,6 @@
 use mc_core::Result;
 use serde::Serialize;
-use sqlx::PgPool;
+use sqlx::{Executor, PgPool, Postgres};
 use uuid::Uuid;
 
 use super::{db_error, db_error_unique};
@@ -58,42 +58,41 @@ pub async fn everyone(pool: &PgPool) -> Result<Option<RoleRecord>> {
         .map_err(|error| db_error("load everyone role", error))
 }
 
-pub async fn create(
-    pool: &PgPool,
+pub async fn create<'e, E>(
+    executor: E,
     name: &str,
     color: Option<i32>,
     permissions: i64,
-) -> Result<RoleRecord> {
-    let position = sqlx::query_scalar::<_, i32>(
-        "SELECT COALESCE(MAX(position), 0) + 1 FROM roles WHERE NOT is_everyone",
+) -> Result<RoleRecord>
+where
+    E: Executor<'e, Database = Postgres>,
+{
+    sqlx::query_as::<_, RoleRecord>(
+        "INSERT INTO roles (id, name, color, position, permissions)
+         VALUES ($1, $2, $3,
+                 (SELECT COALESCE(MAX(position), 0) + 1 FROM roles WHERE NOT is_everyone),
+                 $4)
+         RETURNING id, name, color, position, permissions, is_everyone, 0::bigint AS member_count",
     )
-    .fetch_one(pool)
+    .bind(Uuid::now_v7())
+    .bind(name)
+    .bind(color)
+    .bind(permissions)
+    .fetch_one(executor)
     .await
-    .map_err(|error| db_error("next role position", error))?;
-
-    let query = "INSERT INTO roles (id, name, color, position, permissions)
-         VALUES ($1, $2, $3, $4, $5)
-         RETURNING id, name, color, position, permissions, is_everyone, 0::bigint AS member_count"
-        .to_string();
-
-    sqlx::query_as::<_, RoleRecord>(&query)
-        .bind(Uuid::now_v7())
-        .bind(name)
-        .bind(color)
-        .bind(position)
-        .bind(permissions)
-        .fetch_one(pool)
-        .await
-        .map_err(|error| db_error_unique("create role", error))
+    .map_err(|error| db_error_unique("create role", error))
 }
 
-pub async fn update(
-    pool: &PgPool,
+pub async fn update<'e, E>(
+    executor: E,
     id: Uuid,
     name: &str,
     color: Option<i32>,
     permissions: i64,
-) -> Result<bool> {
+) -> Result<bool>
+where
+    E: Executor<'e, Database = Postgres>,
+{
     let result = sqlx::query(
         "UPDATE roles
          SET name = $2, color = $3, permissions = $4, updated_at = now()
@@ -103,27 +102,33 @@ pub async fn update(
     .bind(name)
     .bind(color)
     .bind(permissions)
-    .execute(pool)
+    .execute(executor)
     .await
     .map_err(|error| db_error_unique("update role", error))?;
 
     Ok(result.rows_affected() > 0)
 }
 
-pub async fn update_everyone(pool: &PgPool, permissions: i64) -> Result<()> {
+pub async fn update_everyone<'e, E>(executor: E, permissions: i64) -> Result<()>
+where
+    E: Executor<'e, Database = Postgres>,
+{
     sqlx::query("UPDATE roles SET permissions = $1, updated_at = now() WHERE is_everyone")
         .bind(permissions)
-        .execute(pool)
+        .execute(executor)
         .await
         .map_err(|error| db_error("update everyone role", error))?;
 
     Ok(())
 }
 
-pub async fn delete(pool: &PgPool, id: Uuid) -> Result<bool> {
+pub async fn delete<'e, E>(executor: E, id: Uuid) -> Result<bool>
+where
+    E: Executor<'e, Database = Postgres>,
+{
     let result = sqlx::query("DELETE FROM roles WHERE id = $1 AND NOT is_everyone")
         .bind(id)
-        .execute(pool)
+        .execute(executor)
         .await
         .map_err(|error| db_error("delete role", error))?;
 
@@ -164,25 +169,31 @@ pub async fn reorder(pool: &PgPool, ids: &[Uuid]) -> Result<()> {
     Ok(())
 }
 
-pub async fn assign(pool: &PgPool, user_id: Uuid, role_id: Uuid) -> Result<()> {
+pub async fn assign<'e, E>(executor: E, user_id: Uuid, role_id: Uuid) -> Result<()>
+where
+    E: Executor<'e, Database = Postgres>,
+{
     sqlx::query(
         "INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2)
          ON CONFLICT DO NOTHING",
     )
     .bind(user_id)
     .bind(role_id)
-    .execute(pool)
+    .execute(executor)
     .await
     .map_err(|error| db_error("assign role", error))?;
 
     Ok(())
 }
 
-pub async fn unassign(pool: &PgPool, user_id: Uuid, role_id: Uuid) -> Result<bool> {
+pub async fn unassign<'e, E>(executor: E, user_id: Uuid, role_id: Uuid) -> Result<bool>
+where
+    E: Executor<'e, Database = Postgres>,
+{
     let result = sqlx::query("DELETE FROM user_roles WHERE user_id = $1 AND role_id = $2")
         .bind(user_id)
         .bind(role_id)
-        .execute(pool)
+        .execute(executor)
         .await
         .map_err(|error| db_error("unassign role", error))?;
 
