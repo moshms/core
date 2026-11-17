@@ -47,7 +47,7 @@ async fn run_contract(storage: Arc<dyn Storage>) {
         (Delivery::NginxInternal(path), true) => {
             assert_eq!(path, "/_media/artist/album/01%20renamed.flac");
         }
-        (Delivery::Stream, false) => {}
+        (Delivery::Stream, _) => {}
         (Delivery::Presigned(url), false) if storage.caps().presign => {
             assert!(url.starts_with("http"));
         }

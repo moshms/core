@@ -254,10 +254,14 @@ impl Storage for LocalStorage {
 
     async fn delivery(&self, key: &Key) -> Result<Delivery> {
         self.stat(key).await?;
-        Ok(Delivery::NginxInternal(format!(
-            "/_media/{}",
-            encode_path(key.as_str())
-        )))
+        if self.root == Path::new("/library") {
+            Ok(Delivery::NginxInternal(format!(
+                "/_media/{}",
+                encode_path(key.as_str())
+            )))
+        } else {
+            Ok(Delivery::Stream)
+        }
     }
 
     fn local_path(&self, key: &Key) -> Option<PathBuf> {

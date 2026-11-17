@@ -22,16 +22,18 @@ const AUDIO_EXTENSIONS: &[&str] = &[
     "mpc", "wma",
 ];
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ScanMode {
     Full,
+    Paths(Vec<Key>),
 }
 
 impl ScanMode {
     #[must_use]
-    pub const fn as_str(self) -> &'static str {
+    pub fn as_str(&self) -> &'static str {
         match self {
             Self::Full => "full",
+            Self::Paths(_) => "paths",
         }
     }
 }
@@ -65,8 +67,31 @@ impl Scanner {
         storage: Arc<dyn Storage>,
         mode: ScanMode,
     ) -> Result<ScanStats> {
+        let lock_key = i64::from_be_bytes(
+            library.id.as_bytes()[..8]
+                .try_into()
+                .expect("uuid prefix is eight bytes"),
+        );
+        let mut lock_connection = self.pool.acquire().await.map_err(|error| {
+            mc_core::CoreError::Internal(format!("acquire scan connection: {error}"))
+        })?;
+        let locked = sqlx::query_scalar::<_, bool>("SELECT pg_try_advisory_lock($1)")
+            .bind(lock_key)
+            .fetch_one(&mut *lock_connection)
+            .await
+            .map_err(|error| mc_core::CoreError::Internal(format!("acquire scan lock: {error}")))?;
+        if !locked {
+            return Err(mc_core::CoreError::Conflict(
+                "library scan is already running".to_owned(),
+            ));
+        }
+
         let run_id = scan_runs::start(&self.pool, library.id, mode.as_str()).await?;
-        let result = self.scan(library, storage).await;
+        let result = self.scan(library, storage, &mode).await;
+        let _ = sqlx::query_scalar::<_, bool>("SELECT pg_advisory_unlock($1)")
+            .bind(lock_key)
+            .fetch_one(&mut *lock_connection)
+            .await;
 
         match &result {
             Ok(stats) => {
@@ -89,11 +114,67 @@ impl Scanner {
         result
     }
 
-    async fn scan(&self, library: &LibraryRecord, storage: Arc<dyn Storage>) -> Result<ScanStats> {
+    async fn scan(
+        &self,
+        library: &LibraryRecord,
+        storage: Arc<dyn Storage>,
+        mode: &ScanMode,
+    ) -> Result<ScanStats> {
         let existing = media_files::load_indexed(&self.pool, library.id).await?;
+        let mut stats = ScanStats::default();
+
+        if let ScanMode::Paths(keys) = mode {
+            for key in keys {
+                stats.files_seen += 1;
+                if !is_audio_key(key.as_str()) {
+                    continue;
+                }
+
+                let entry = match storage.stat(key).await {
+                    Ok(meta) => Entry {
+                        key: key.clone(),
+                        meta,
+                    },
+                    Err(mc_core::CoreError::NotFound { .. }) => {
+                        stats.removed += media_files::mark_missing(
+                            &self.pool,
+                            library.id,
+                            &[key.as_str().to_owned()],
+                        )
+                        .await?;
+                        continue;
+                    }
+                    Err(error) => {
+                        stats.errors += 1;
+                        warn!(key = %key, %error, "failed to stat changed file");
+                        continue;
+                    }
+                };
+
+                if !needs_index(existing.get(entry.key.as_str()), &entry.meta) {
+                    stats.unchanged += 1;
+                    continue;
+                }
+
+                self.index_or_record(library, &storage, &entry, &existing, &mut stats)
+                    .await;
+            }
+
+            let removed_albums = albums::delete_empty(&self.pool).await?;
+            let removed_artists = artists::delete_empty(&self.pool).await?;
+            if removed_albums > 0 || removed_artists > 0 {
+                info!(
+                    removed_albums,
+                    removed_artists, "removed empty catalog entries"
+                );
+            }
+
+            info!(?stats, "path scan finished");
+            return Ok(stats);
+        }
+
         let prefix = Key::new(library.root_prefix.as_str())?;
         let mut stream = storage.list(&prefix);
-        let mut stats = ScanStats::default();
         let mut seen = HashSet::new();
 
         while let Some(item) = stream.next().await {
@@ -118,32 +199,8 @@ impl Scanner {
                 continue;
             }
 
-            let was_known = existing.contains_key(entry.key.as_str());
-            match self
-                .index_entry(library, &storage, &entry, was_known, &mut stats)
-                .await
-            {
-                Ok(IndexOutcome::Indexed) => {
-                    if was_known {
-                        stats.updated += 1;
-                    } else {
-                        stats.added += 1;
-                    }
-                }
-                Ok(IndexOutcome::Duplicate) => {
-                    stats.duplicates += 1;
-                }
-                Err(error) => {
-                    stats.errors += 1;
-                    warn!(key = %entry.key, %error, "failed to index file");
-
-                    if let Err(mark_error) =
-                        media_files::mark_failed(&self.pool, library.id, entry.key.as_str()).await
-                    {
-                        warn!(key = %entry.key, %mark_error, "failed to mark media file");
-                    }
-                }
-            }
+            self.index_or_record(library, &storage, &entry, &existing, &mut stats)
+                .await;
         }
 
         let removed = existing
@@ -163,6 +220,41 @@ impl Scanner {
 
         info!(?stats, "scan finished");
         Ok(stats)
+    }
+
+    async fn index_or_record(
+        &self,
+        library: &LibraryRecord,
+        storage: &Arc<dyn Storage>,
+        entry: &Entry,
+        existing: &std::collections::HashMap<String, MediaFileState>,
+        stats: &mut ScanStats,
+    ) {
+        let was_known = existing.contains_key(entry.key.as_str());
+        match self
+            .index_entry(library, storage, entry, was_known, stats)
+            .await
+        {
+            Ok(IndexOutcome::Indexed) => {
+                if was_known {
+                    stats.updated += 1;
+                } else {
+                    stats.added += 1;
+                }
+            }
+            Ok(IndexOutcome::Duplicate) => {
+                stats.duplicates += 1;
+            }
+            Err(error) => {
+                stats.errors += 1;
+                warn!(key = %entry.key, %error, "failed to index file");
+                if let Err(mark_error) =
+                    media_files::mark_failed(&self.pool, library.id, entry.key.as_str()).await
+                {
+                    warn!(key = %entry.key, %mark_error, "failed to mark media file");
+                }
+            }
+        }
     }
 
     async fn index_entry(

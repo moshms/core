@@ -45,13 +45,18 @@ pub async fn claim_one(
         "WITH next AS (
              SELECT id
              FROM jobs
-             WHERE status = 'pending' AND run_at <= now() AND kind = ANY($2)
+             WHERE kind = ANY($2)
+               AND (
+                   (status = 'pending' AND run_at <= now())
+                   OR (status = 'running' AND locked_until < now())
+               )
              ORDER BY run_at
              FOR UPDATE SKIP LOCKED
              LIMIT 1
          )
          UPDATE jobs
-         SET status = 'running', locked_by = $1, attempts = attempts + 1, updated_at = now()
+         SET status = 'running', locked_by = $1, attempts = attempts + 1,
+             locked_until = now() + interval '10 minutes', updated_at = now()
          FROM next
          WHERE jobs.id = next.id
          RETURNING jobs.id, jobs.kind, jobs.payload, jobs.status, jobs.attempts, jobs.max_attempts, jobs.last_error",
@@ -66,7 +71,8 @@ pub async fn claim_one(
 pub async fn complete(pool: &PgPool, id: Uuid) -> Result<()> {
     sqlx::query(
         "UPDATE jobs
-         SET status = 'done', locked_by = NULL, last_error = NULL, updated_at = now()
+         SET status = 'done', locked_by = NULL, locked_until = NULL,
+             last_error = NULL, updated_at = now()
          WHERE id = $1",
     )
     .bind(id)
@@ -85,6 +91,7 @@ pub async fn fail(pool: &PgPool, job: &JobRecord, error: &str) -> Result<()> {
         "UPDATE jobs
          SET status = $2,
              locked_by = NULL,
+             locked_until = NULL,
              last_error = $3,
              run_at = now() + make_interval(secs => $4),
              updated_at = now()
@@ -105,7 +112,7 @@ pub async fn retry(pool: &PgPool, id: Uuid) -> Result<bool> {
     let result = sqlx::query(
         "UPDATE jobs
          SET status = 'pending', attempts = 0, run_at = now(), locked_by = NULL,
-             last_error = NULL, updated_at = now()
+             locked_until = NULL, last_error = NULL, updated_at = now()
          WHERE id = $1 AND status IN ('needs_review', 'failed', 'done')",
     )
     .bind(id)

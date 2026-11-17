@@ -9,6 +9,9 @@ use super::db_error;
 pub struct ApiTokenRecord {
     pub id: Uuid,
     pub name: String,
+    pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub last_used_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Clone, Debug, sqlx::FromRow)]
@@ -61,18 +64,23 @@ pub async fn find_user(pool: &PgPool, token_hash: &str) -> Result<Option<ApiToke
 }
 
 pub async fn touch(pool: &PgPool, token_hash: &str) -> Result<()> {
-    sqlx::query("UPDATE api_tokens SET last_used_at = now() WHERE token_hash = $1")
-        .bind(token_hash)
-        .execute(pool)
-        .await
-        .map_err(|error| db_error("touch api token", error))?;
+    sqlx::query(
+        "UPDATE api_tokens SET last_used_at = now()
+         WHERE token_hash = $1
+           AND (last_used_at IS NULL OR last_used_at < now() - interval '5 minutes')",
+    )
+    .bind(token_hash)
+    .execute(pool)
+    .await
+    .map_err(|error| db_error("touch api token", error))?;
 
     Ok(())
 }
 
 pub async fn list(pool: &PgPool, user_id: Uuid) -> Result<Vec<ApiTokenRecord>> {
     sqlx::query_as::<_, ApiTokenRecord>(
-        "SELECT id, name FROM api_tokens WHERE user_id = $1 ORDER BY created_at DESC",
+        "SELECT id, name, expires_at, created_at, last_used_at
+         FROM api_tokens WHERE user_id = $1 ORDER BY created_at DESC",
     )
     .bind(user_id)
     .fetch_all(pool)
