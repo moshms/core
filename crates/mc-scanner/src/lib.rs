@@ -3,6 +3,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use futures_util::StreamExt;
+use mc_core::CoreError;
 use mc_core::Result;
 use mc_db::repos::libraries::LibraryRecord;
 use mc_db::repos::media_files::{MediaFileState, NewMediaFile};
@@ -12,6 +13,7 @@ use mc_db::PgPool;
 use mc_media::{ArtworkData, MediaMetadata, MediaParser};
 use mc_storage::{Entry, Key, Meta, Storage};
 use serde::Serialize;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::{info, warn};
 
 const UNKNOWN_ARTIST: &str = "Unknown Artist";
@@ -176,6 +178,7 @@ impl Scanner {
         let prefix = Key::new(library.root_prefix.as_str())?;
         let mut stream = storage.list(&prefix);
         let mut seen = HashSet::new();
+        let mut pending = Vec::new();
 
         while let Some(item) = stream.next().await {
             let entry = match item {
@@ -199,8 +202,42 @@ impl Scanner {
                 continue;
             }
 
-            self.index_or_record(library, &storage, &entry, &existing, &mut stats)
-                .await;
+            let was_known = existing.contains_key(entry.key.as_str());
+            pending.push((entry, was_known));
+        }
+
+        let mut pending = futures_util::stream::iter(pending)
+            .map(|(entry, was_known)| {
+                let storage = storage.clone();
+                async move {
+                    let outcome = self.index_entry(library, &storage, &entry, was_known).await;
+                    (entry, was_known, outcome)
+                }
+            })
+            .buffer_unordered(4);
+        while let Some((entry, was_known, result)) = pending.next().await {
+            stats.tags_read += 1;
+            match result {
+                Ok(IndexOutcome::Indexed) => {
+                    if was_known {
+                        stats.updated += 1;
+                    } else {
+                        stats.added += 1;
+                    }
+                }
+                Ok(IndexOutcome::Duplicate) => {
+                    stats.duplicates += 1;
+                }
+                Err(error) => {
+                    stats.errors += 1;
+                    warn!(key = %entry.key, %error, "failed to index file");
+                    if let Err(mark_error) =
+                        media_files::mark_failed(&self.pool, library.id, entry.key.as_str()).await
+                    {
+                        warn!(key = %entry.key, %mark_error, "failed to mark media file");
+                    }
+                }
+            }
         }
 
         let removed = existing
@@ -231,10 +268,8 @@ impl Scanner {
         stats: &mut ScanStats,
     ) {
         let was_known = existing.contains_key(entry.key.as_str());
-        match self
-            .index_entry(library, storage, entry, was_known, stats)
-            .await
-        {
+        stats.tags_read += 1;
+        match self.index_entry(library, storage, entry, was_known).await {
             Ok(IndexOutcome::Indexed) => {
                 if was_known {
                     stats.updated += 1;
@@ -257,18 +292,64 @@ impl Scanner {
         }
     }
 
+    async fn read_media(
+        &self,
+        storage: &Arc<dyn Storage>,
+        entry: &Entry,
+    ) -> Result<(MediaMetadata, String)> {
+        if let Some(path) = storage.local_path(&entry.key) {
+            let parser = self.parser.clone();
+            let parse_path = path.clone();
+            let metadata = tokio::task::spawn_blocking(move || parser.parse_path(&parse_path))
+                .await
+                .map_err(|error| CoreError::Internal(format!("parse audio task: {error}")))??;
+            let content_hash = hash_file(&path).await?;
+            return Ok((metadata, content_hash));
+        }
+
+        let temporary = tempfile::Builder::new()
+            .prefix("mc-scan-")
+            .tempfile()
+            .map_err(|error| CoreError::Unavailable(format!("create scan temp file: {error}")))?;
+        let mut file =
+            tokio::fs::File::from_std(temporary.reopen().map_err(|error| {
+                CoreError::Unavailable(format!("open scan temp file: {error}"))
+            })?);
+        let meta = storage.stat(&entry.key).await?;
+        let mut hasher = blake3::Hasher::new();
+        let mut offset = 0_u64;
+        const CHUNK: u64 = 4 * 1024 * 1024;
+        while offset < meta.size {
+            let end = (offset + CHUNK).min(meta.size);
+            let bytes = storage.read_range(&entry.key, offset..end).await?;
+            hasher.update(&bytes);
+            file.write_all(&bytes).await.map_err(|error| {
+                CoreError::Unavailable(format!("write scan temp file: {error}"))
+            })?;
+            offset = end;
+        }
+        file.flush()
+            .await
+            .map_err(|error| CoreError::Unavailable(format!("flush scan temp file: {error}")))?;
+        drop(file);
+
+        let parser = self.parser.clone();
+        let parse_path = temporary.path().to_path_buf();
+        let metadata = tokio::task::spawn_blocking(move || parser.parse_path(&parse_path))
+            .await
+            .map_err(|error| CoreError::Internal(format!("parse audio task: {error}")))??;
+
+        Ok((metadata, hasher.finalize().to_hex().to_string()))
+    }
+
     async fn index_entry(
         &self,
         library: &LibraryRecord,
         storage: &Arc<dyn Storage>,
         entry: &Entry,
         was_known: bool,
-        stats: &mut ScanStats,
     ) -> Result<IndexOutcome> {
-        let data = storage.read(&entry.key).await?;
-        stats.tags_read += 1;
-        let metadata = self.parser.parse(&data)?;
-        let content_hash = blake3::hash(&data).to_hex().to_string();
+        let (metadata, content_hash) = self.read_media(storage, entry).await?;
 
         let title = metadata
             .title
@@ -443,6 +524,26 @@ fn clean(value: &str) -> Option<&str> {
     } else {
         Some(value)
     }
+}
+
+async fn hash_file(path: &Path) -> Result<String> {
+    let mut file = tokio::fs::File::open(path)
+        .await
+        .map_err(|error| CoreError::Unavailable(format!("open audio file: {error}")))?;
+    let mut hasher = blake3::Hasher::new();
+    let mut buffer = vec![0_u8; 64 * 1024];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .await
+            .map_err(|error| CoreError::Unavailable(format!("read audio file: {error}")))?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+
+    Ok(hasher.finalize().to_hex().to_string())
 }
 
 #[cfg(test)]
