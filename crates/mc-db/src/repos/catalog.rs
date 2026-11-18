@@ -305,14 +305,19 @@ pub struct GenreSummary {
     pub track_count: i64,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub struct TrackFilters {
+    pub library_id: Option<Uuid>,
+    pub genre_id: Option<Uuid>,
+    pub missing_artwork: bool,
+    pub missing_year: bool,
+    pub uploaded_by: Option<Uuid>,
+}
+
 pub async fn list_tracks_page(
     pool: &PgPool,
     visible: &[Uuid],
-    library_id: Option<Uuid>,
-    genre_id: Option<Uuid>,
-    missing_artwork: bool,
-    missing_year: bool,
-    uploaded_by: Option<Uuid>,
+    filters: TrackFilters,
     limit: Option<i64>,
     offset: i64,
 ) -> Result<Vec<TrackSummary>> {
@@ -337,11 +342,11 @@ pub async fn list_tracks_page(
 
     sqlx::query_as::<_, TrackSummary>(&query)
         .bind(visible)
-        .bind(library_id)
-        .bind(genre_id)
-        .bind(missing_artwork)
-        .bind(missing_year)
-        .bind(uploaded_by)
+        .bind(filters.library_id)
+        .bind(filters.genre_id)
+        .bind(filters.missing_artwork)
+        .bind(filters.missing_year)
+        .bind(filters.uploaded_by)
         .bind(limit)
         .bind(offset)
         .fetch_all(pool)
@@ -349,15 +354,7 @@ pub async fn list_tracks_page(
         .map_err(|error| db_error("list tracks", error))
 }
 
-pub async fn count_tracks(
-    pool: &PgPool,
-    visible: &[Uuid],
-    library_id: Option<Uuid>,
-    genre_id: Option<Uuid>,
-    missing_artwork: bool,
-    missing_year: bool,
-    uploaded_by: Option<Uuid>,
-) -> Result<i64> {
+pub async fn count_tracks(pool: &PgPool, visible: &[Uuid], filters: TrackFilters) -> Result<i64> {
     sqlx::query_scalar::<_, i64>(
         "SELECT count(*)
          FROM tracks t
@@ -375,11 +372,11 @@ pub async fn count_tracks(
            AND ($6::uuid IS NULL OR mf.uploaded_by = $6)",
     )
     .bind(visible)
-    .bind(library_id)
-    .bind(genre_id)
-    .bind(missing_artwork)
-    .bind(missing_year)
-    .bind(uploaded_by)
+    .bind(filters.library_id)
+    .bind(filters.genre_id)
+    .bind(filters.missing_artwork)
+    .bind(filters.missing_year)
+    .bind(filters.uploaded_by)
     .fetch_one(pool)
     .await
     .map_err(|error| db_error("count tracks", error))
