@@ -10,6 +10,8 @@ message TranscodeRequest {
   string source_key = 1;
   string format = 2;
   uint32 bitrate_kbps = 3;
+  string source_path = 4;
+  bool cleanup_source = 5;
 }
 
 message TranscodeChunk {
