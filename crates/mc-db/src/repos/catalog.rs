@@ -305,11 +305,19 @@ pub struct GenreSummary {
     pub track_count: i64,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub struct TrackFilters {
+    pub library_id: Option<Uuid>,
+    pub genre_id: Option<Uuid>,
+    pub missing_artwork: bool,
+    pub missing_year: bool,
+    pub uploaded_by: Option<Uuid>,
+}
+
 pub async fn list_tracks_page(
     pool: &PgPool,
     visible: &[Uuid],
-    library_id: Option<Uuid>,
-    genre_id: Option<Uuid>,
+    filters: TrackFilters,
     limit: Option<i64>,
     offset: i64,
 ) -> Result<Vec<TrackSummary>> {
@@ -325,14 +333,20 @@ pub async fn list_tracks_page(
                SELECT 1 FROM track_genres tg
                WHERE tg.track_id = t.id AND tg.genre_id = $3
            ))
+           AND ($4::bool = false OR al.artwork_id IS NULL)
+           AND ($5::bool = false OR al.year IS NULL OR al.year <= 0)
+           AND ($6::uuid IS NULL OR mf.uploaded_by = $6)
          ORDER BY lower(t.title), t.disc_no, t.track_no
-         LIMIT $4 OFFSET $5"
+         LIMIT $7 OFFSET $8"
     );
 
     sqlx::query_as::<_, TrackSummary>(&query)
         .bind(visible)
-        .bind(library_id)
-        .bind(genre_id)
+        .bind(filters.library_id)
+        .bind(filters.genre_id)
+        .bind(filters.missing_artwork)
+        .bind(filters.missing_year)
+        .bind(filters.uploaded_by)
         .bind(limit)
         .bind(offset)
         .fetch_all(pool)
@@ -340,27 +354,29 @@ pub async fn list_tracks_page(
         .map_err(|error| db_error("list tracks", error))
 }
 
-pub async fn count_tracks(
-    pool: &PgPool,
-    visible: &[Uuid],
-    library_id: Option<Uuid>,
-    genre_id: Option<Uuid>,
-) -> Result<i64> {
+pub async fn count_tracks(pool: &PgPool, visible: &[Uuid], filters: TrackFilters) -> Result<i64> {
     sqlx::query_scalar::<_, i64>(
         "SELECT count(*)
          FROM tracks t
          JOIN media_files mf ON mf.id = t.primary_file_id
+         LEFT JOIN albums al ON al.id = t.album_id
          WHERE mf.library_id = ANY($1)
            AND mf.scan_state = 'indexed'
            AND ($2::uuid IS NULL OR mf.library_id = $2)
            AND ($3::uuid IS NULL OR EXISTS (
                SELECT 1 FROM track_genres tg
                WHERE tg.track_id = t.id AND tg.genre_id = $3
-           ))",
+           ))
+           AND ($4::bool = false OR al.artwork_id IS NULL)
+           AND ($5::bool = false OR al.year IS NULL OR al.year <= 0)
+           AND ($6::uuid IS NULL OR mf.uploaded_by = $6)",
     )
     .bind(visible)
-    .bind(library_id)
-    .bind(genre_id)
+    .bind(filters.library_id)
+    .bind(filters.genre_id)
+    .bind(filters.missing_artwork)
+    .bind(filters.missing_year)
+    .bind(filters.uploaded_by)
     .fetch_one(pool)
     .await
     .map_err(|error| db_error("count tracks", error))
