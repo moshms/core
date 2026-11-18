@@ -310,6 +310,9 @@ pub async fn list_tracks_page(
     visible: &[Uuid],
     library_id: Option<Uuid>,
     genre_id: Option<Uuid>,
+    missing_artwork: bool,
+    missing_year: bool,
+    uploaded_by: Option<Uuid>,
     limit: Option<i64>,
     offset: i64,
 ) -> Result<Vec<TrackSummary>> {
@@ -325,14 +328,20 @@ pub async fn list_tracks_page(
                SELECT 1 FROM track_genres tg
                WHERE tg.track_id = t.id AND tg.genre_id = $3
            ))
+           AND ($4::bool = false OR al.artwork_id IS NULL)
+           AND ($5::bool = false OR al.year IS NULL OR al.year <= 0)
+           AND ($6::uuid IS NULL OR mf.uploaded_by = $6)
          ORDER BY lower(t.title), t.disc_no, t.track_no
-         LIMIT $4 OFFSET $5"
+         LIMIT $7 OFFSET $8"
     );
 
     sqlx::query_as::<_, TrackSummary>(&query)
         .bind(visible)
         .bind(library_id)
         .bind(genre_id)
+        .bind(missing_artwork)
+        .bind(missing_year)
+        .bind(uploaded_by)
         .bind(limit)
         .bind(offset)
         .fetch_all(pool)
@@ -345,22 +354,32 @@ pub async fn count_tracks(
     visible: &[Uuid],
     library_id: Option<Uuid>,
     genre_id: Option<Uuid>,
+    missing_artwork: bool,
+    missing_year: bool,
+    uploaded_by: Option<Uuid>,
 ) -> Result<i64> {
     sqlx::query_scalar::<_, i64>(
         "SELECT count(*)
          FROM tracks t
          JOIN media_files mf ON mf.id = t.primary_file_id
+         LEFT JOIN albums al ON al.id = t.album_id
          WHERE mf.library_id = ANY($1)
            AND mf.scan_state = 'indexed'
            AND ($2::uuid IS NULL OR mf.library_id = $2)
            AND ($3::uuid IS NULL OR EXISTS (
                SELECT 1 FROM track_genres tg
                WHERE tg.track_id = t.id AND tg.genre_id = $3
-           ))",
+           ))
+           AND ($4::bool = false OR al.artwork_id IS NULL)
+           AND ($5::bool = false OR al.year IS NULL OR al.year <= 0)
+           AND ($6::uuid IS NULL OR mf.uploaded_by = $6)",
     )
     .bind(visible)
     .bind(library_id)
     .bind(genre_id)
+    .bind(missing_artwork)
+    .bind(missing_year)
+    .bind(uploaded_by)
     .fetch_one(pool)
     .await
     .map_err(|error| db_error("count tracks", error))
