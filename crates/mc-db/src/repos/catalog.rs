@@ -120,12 +120,13 @@ const TRACK_COLUMNS: &str = "
 const VISIBLE_TRACK: &str = "mf.library_id = ANY($1) AND mf.scan_state = 'indexed'";
 
 pub async fn list_artists(pool: &PgPool, visible: &[Uuid]) -> Result<Vec<ArtistSummary>> {
-    list_artists_page(pool, visible, None, 0).await
+    list_artists_page(pool, visible, None, None, 0).await
 }
 
 pub async fn list_artists_page(
     pool: &PgPool,
     visible: &[Uuid],
+    library_id: Option<Uuid>,
     limit: Option<i64>,
     offset: i64,
 ) -> Result<Vec<ArtistSummary>> {
@@ -138,6 +139,7 @@ pub async fn list_artists_page(
               JOIN media_files mf ON mf.id = t.primary_file_id
               WHERE al.album_artist_id = ar.id
                 AND mf.library_id = ANY($1)
+                AND ($2::uuid IS NULL OR mf.library_id = $2)
                 AND mf.scan_state = 'indexed') AS album_count,
              (SELECT count(*)
               FROM track_artists ta
@@ -145,6 +147,7 @@ pub async fn list_artists_page(
               JOIN media_files mf ON mf.id = t.primary_file_id
               WHERE ta.artist_id = ar.id
                 AND mf.library_id = ANY($1)
+                AND ($2::uuid IS NULL OR mf.library_id = $2)
                 AND mf.scan_state = 'indexed') AS track_count
          FROM artists ar
          WHERE EXISTS (
@@ -154,14 +157,15 @@ pub async fn list_artists_page(
              JOIN media_files mf ON mf.id = t.primary_file_id
              WHERE ta.artist_id = ar.id
                AND mf.library_id = ANY($1)
+               AND ($2::uuid IS NULL OR mf.library_id = $2)
                AND mf.scan_state = 'indexed'
          )
          ORDER BY lower(ar.name)
-         LIMIT $2 OFFSET $3"
-        .to_string();
+         LIMIT $3 OFFSET $4";
 
-    sqlx::query_as::<_, ArtistSummary>(&query)
+    sqlx::query_as::<_, ArtistSummary>(query)
         .bind(visible)
+        .bind(library_id)
         .bind(limit)
         .bind(offset)
         .fetch_all(pool)
@@ -169,7 +173,11 @@ pub async fn list_artists_page(
         .map_err(|error| db_error("list artists", error))
 }
 
-pub async fn count_artists(pool: &PgPool, visible: &[Uuid]) -> Result<i64> {
+pub async fn count_artists(
+    pool: &PgPool,
+    visible: &[Uuid],
+    library_id: Option<Uuid>,
+) -> Result<i64> {
     sqlx::query_scalar::<_, i64>(
         "SELECT count(*)
          FROM artists ar
@@ -180,10 +188,12 @@ pub async fn count_artists(pool: &PgPool, visible: &[Uuid]) -> Result<i64> {
              JOIN media_files mf ON mf.id = t.primary_file_id
              WHERE ta.artist_id = ar.id
                AND mf.library_id = ANY($1)
+               AND ($2::uuid IS NULL OR mf.library_id = $2)
                AND mf.scan_state = 'indexed'
          )",
     )
     .bind(visible)
+    .bind(library_id)
     .fetch_one(pool)
     .await
     .map_err(|error| db_error("count artists", error))
@@ -194,12 +204,13 @@ pub async fn list_albums(
     artist_id: Option<Uuid>,
     visible: &[Uuid],
 ) -> Result<Vec<AlbumSummary>> {
-    list_albums_page(pool, artist_id, visible, None, 0, "artist").await
+    list_albums_page(pool, artist_id, None, visible, None, 0, "artist").await
 }
 
 pub async fn list_albums_page(
     pool: &PgPool,
     artist_id: Option<Uuid>,
+    library_id: Option<Uuid>,
     visible: &[Uuid],
     limit: Option<i64>,
     offset: i64,
@@ -223,12 +234,14 @@ pub async fn list_albums_page(
               JOIN media_files mf ON mf.id = t.primary_file_id
               WHERE t.album_id = al.id
                 AND mf.library_id = ANY($2)
+                AND ($3::uuid IS NULL OR mf.library_id = $3)
                 AND mf.scan_state = 'indexed') AS track_count,
              (SELECT COALESCE(sum(t.duration_ms), 0)::bigint
               FROM tracks t
               JOIN media_files mf ON mf.id = t.primary_file_id
               WHERE t.album_id = al.id
                 AND mf.library_id = ANY($2)
+                AND ($3::uuid IS NULL OR mf.library_id = $3)
                 AND mf.scan_state = 'indexed') AS duration_ms
          FROM albums al
          JOIN artists ar ON ar.id = al.album_artist_id
@@ -239,15 +252,17 @@ pub async fn list_albums_page(
                JOIN media_files mf ON mf.id = t.primary_file_id
                WHERE t.album_id = al.id
                  AND mf.library_id = ANY($2)
+                 AND ($3::uuid IS NULL OR mf.library_id = $3)
                  AND mf.scan_state = 'indexed'
            )
          ORDER BY {order}
-         LIMIT $3 OFFSET $4"
+         LIMIT $4 OFFSET $5"
     );
 
     sqlx::query_as::<_, AlbumSummary>(&query)
         .bind(artist_id)
         .bind(visible)
+        .bind(library_id)
         .bind(limit)
         .bind(offset)
         .fetch_all(pool)
@@ -255,7 +270,12 @@ pub async fn list_albums_page(
         .map_err(|error| db_error("list albums", error))
 }
 
-pub async fn count_albums(pool: &PgPool, artist_id: Option<Uuid>, visible: &[Uuid]) -> Result<i64> {
+pub async fn count_albums(
+    pool: &PgPool,
+    artist_id: Option<Uuid>,
+    visible: &[Uuid],
+    library_id: Option<Uuid>,
+) -> Result<i64> {
     sqlx::query_scalar::<_, i64>(
         "SELECT count(*)
          FROM albums al
@@ -266,14 +286,108 @@ pub async fn count_albums(pool: &PgPool, artist_id: Option<Uuid>, visible: &[Uui
                JOIN media_files mf ON mf.id = t.primary_file_id
                WHERE t.album_id = al.id
                  AND mf.library_id = ANY($2)
+                 AND ($3::uuid IS NULL OR mf.library_id = $3)
                  AND mf.scan_state = 'indexed'
            )",
     )
     .bind(artist_id)
     .bind(visible)
+    .bind(library_id)
     .fetch_one(pool)
     .await
     .map_err(|error| db_error("count albums", error))
+}
+
+#[derive(Clone, Debug, Serialize, sqlx::FromRow)]
+pub struct GenreSummary {
+    pub id: Uuid,
+    pub name: String,
+    pub track_count: i64,
+}
+
+pub async fn list_tracks_page(
+    pool: &PgPool,
+    visible: &[Uuid],
+    library_id: Option<Uuid>,
+    genre_id: Option<Uuid>,
+    limit: Option<i64>,
+    offset: i64,
+) -> Result<Vec<TrackSummary>> {
+    let query = format!(
+        "SELECT {TRACK_COLUMNS}
+         FROM tracks t
+         JOIN media_files mf ON mf.id = t.primary_file_id
+         LEFT JOIN albums al ON al.id = t.album_id
+         LEFT JOIN artists ar ON ar.id = al.album_artist_id
+         WHERE {VISIBLE_TRACK}
+           AND ($2::uuid IS NULL OR mf.library_id = $2)
+           AND ($3::uuid IS NULL OR EXISTS (
+               SELECT 1 FROM track_genres tg
+               WHERE tg.track_id = t.id AND tg.genre_id = $3
+           ))
+         ORDER BY lower(t.title), t.disc_no, t.track_no
+         LIMIT $4 OFFSET $5"
+    );
+
+    sqlx::query_as::<_, TrackSummary>(&query)
+        .bind(visible)
+        .bind(library_id)
+        .bind(genre_id)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(pool)
+        .await
+        .map_err(|error| db_error("list tracks", error))
+}
+
+pub async fn count_tracks(
+    pool: &PgPool,
+    visible: &[Uuid],
+    library_id: Option<Uuid>,
+    genre_id: Option<Uuid>,
+) -> Result<i64> {
+    sqlx::query_scalar::<_, i64>(
+        "SELECT count(*)
+         FROM tracks t
+         JOIN media_files mf ON mf.id = t.primary_file_id
+         WHERE mf.library_id = ANY($1)
+           AND mf.scan_state = 'indexed'
+           AND ($2::uuid IS NULL OR mf.library_id = $2)
+           AND ($3::uuid IS NULL OR EXISTS (
+               SELECT 1 FROM track_genres tg
+               WHERE tg.track_id = t.id AND tg.genre_id = $3
+           ))",
+    )
+    .bind(visible)
+    .bind(library_id)
+    .bind(genre_id)
+    .fetch_one(pool)
+    .await
+    .map_err(|error| db_error("count tracks", error))
+}
+
+pub async fn list_genres(
+    pool: &PgPool,
+    visible: &[Uuid],
+    library_id: Option<Uuid>,
+) -> Result<Vec<GenreSummary>> {
+    sqlx::query_as::<_, GenreSummary>(
+        "SELECT g.id, g.name, count(DISTINCT t.id) AS track_count
+         FROM genres g
+         JOIN track_genres tg ON tg.genre_id = g.id
+         JOIN tracks t ON t.id = tg.track_id
+         JOIN media_files mf ON mf.id = t.primary_file_id
+         WHERE mf.library_id = ANY($1)
+           AND ($2::uuid IS NULL OR mf.library_id = $2)
+           AND mf.scan_state = 'indexed'
+         GROUP BY g.id, g.name
+         ORDER BY lower(g.name)",
+    )
+    .bind(visible)
+    .bind(library_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|error| db_error("list genres", error))
 }
 
 pub async fn get_artist(
