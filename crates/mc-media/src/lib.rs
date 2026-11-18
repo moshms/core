@@ -36,6 +36,12 @@ pub struct ArtworkData {
 
 pub trait MediaParser: Send + Sync {
     fn parse(&self, data: &[u8]) -> Result<MediaMetadata>;
+
+    fn parse_path(&self, path: &Path) -> Result<MediaMetadata> {
+        let data = std::fs::read(path)
+            .map_err(|error| CoreError::Validation(format!("read audio file: {error}")))?;
+        self.parse(&data)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -50,75 +56,85 @@ impl MediaParser for LoftyParser {
             .read()
             .map_err(|error| CoreError::Validation(format!("unsupported audio: {error}")))?;
 
-        let tag = tagged.primary_tag().or_else(|| tagged.first_tag());
-        let properties = tagged.properties();
+        Ok(metadata_from_tagged(tagged))
+    }
 
-        let title = tag
-            .and_then(|tag| tag.title())
-            .map(|value| value.into_owned())
-            .filter(|value| !value.trim().is_empty());
-        let artist = tag
-            .and_then(|tag| tag.artist())
-            .map(|value| value.into_owned())
-            .filter(|value| !value.trim().is_empty());
-        let album_artist = tag
-            .and_then(|tag| tag.get_string(ItemKey::AlbumArtist))
-            .map(str::to_owned)
-            .filter(|value| !value.trim().is_empty());
-        let album = tag
-            .and_then(|tag| tag.album())
-            .map(|value| value.into_owned())
-            .filter(|value| !value.trim().is_empty());
-        let year = tag
-            .and_then(|tag| tag.date())
-            .map(|date| i32::from(date.year));
-        let track_no = tag.and_then(|tag| tag.track());
-        let disc_no = tag.and_then(|tag| tag.disk());
+    fn parse_path(&self, path: &Path) -> Result<MediaMetadata> {
+        let tagged = lofty::read_from_path(path)
+            .map_err(|error| CoreError::Validation(format!("unsupported audio: {error}")))?;
+        Ok(metadata_from_tagged(tagged))
+    }
+}
 
-        let mut genres = tag
-            .map(|tag| {
-                tag.get_strings(ItemKey::Genre)
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .map(str::to_owned)
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        genres.sort_by_key(|genre| genre.to_lowercase());
-        genres.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+fn metadata_from_tagged(tagged: TaggedFile) -> MediaMetadata {
+    let tag = tagged.primary_tag().or_else(|| tagged.first_tag());
+    let properties = tagged.properties();
 
-        let artwork = tag.and_then(|tag| {
-            let picture = tag
-                .pictures()
-                .iter()
-                .find(|picture| picture.pic_type() == PictureType::CoverFront)
-                .or_else(|| tag.pictures().first())?;
+    let title = tag
+        .and_then(|tag| tag.title())
+        .map(|value| value.into_owned())
+        .filter(|value| !value.trim().is_empty());
+    let artist = tag
+        .and_then(|tag| tag.artist())
+        .map(|value| value.into_owned())
+        .filter(|value| !value.trim().is_empty());
+    let album_artist = tag
+        .and_then(|tag| tag.get_string(ItemKey::AlbumArtist))
+        .map(str::to_owned)
+        .filter(|value| !value.trim().is_empty());
+    let album = tag
+        .and_then(|tag| tag.album())
+        .map(|value| value.into_owned())
+        .filter(|value| !value.trim().is_empty());
+    let year = tag
+        .and_then(|tag| tag.date())
+        .map(|date| i32::from(date.year));
+    let track_no = tag.and_then(|tag| tag.track());
+    let disc_no = tag.and_then(|tag| tag.disk());
 
-            Some(ArtworkData {
-                hash: blake3::hash(picture.data()).to_hex().to_string(),
-                mime: picture
-                    .mime_type()
-                    .map_or("application/octet-stream", |mime| mime.as_str())
-                    .to_owned(),
-                data: picture.data().to_vec(),
-            })
-        });
-
-        Ok(MediaMetadata {
-            title,
-            artist,
-            album_artist,
-            album,
-            year,
-            track_no,
-            disc_no,
-            genres,
-            duration_ms: Some(duration_ms(properties.duration())),
-            bitrate: properties.audio_bitrate(),
-            sample_rate: properties.sample_rate(),
-            format: Some(format!("{:?}", tagged.file_type()).to_lowercase()),
-            artwork,
+    let mut genres = tag
+        .map(|tag| {
+            tag.get_strings(ItemKey::Genre)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
         })
+        .unwrap_or_default();
+    genres.sort_by_key(|genre| genre.to_lowercase());
+    genres.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+
+    let artwork = tag.and_then(|tag| {
+        let picture = tag
+            .pictures()
+            .iter()
+            .find(|picture| picture.pic_type() == PictureType::CoverFront)
+            .or_else(|| tag.pictures().first())?;
+
+        Some(ArtworkData {
+            hash: blake3::hash(picture.data()).to_hex().to_string(),
+            mime: picture
+                .mime_type()
+                .map_or("application/octet-stream", |mime| mime.as_str())
+                .to_owned(),
+            data: picture.data().to_vec(),
+        })
+    });
+
+    MediaMetadata {
+        title,
+        artist,
+        album_artist,
+        album,
+        year,
+        track_no,
+        disc_no,
+        genres,
+        duration_ms: Some(duration_ms(properties.duration())),
+        bitrate: properties.audio_bitrate(),
+        sample_rate: properties.sample_rate(),
+        format: Some(format!("{:?}", tagged.file_type()).to_lowercase()),
+        artwork,
     }
 }
 
