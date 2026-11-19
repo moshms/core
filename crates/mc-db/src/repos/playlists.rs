@@ -10,6 +10,7 @@ use super::db_error;
 pub struct PlaylistRecord {
     pub id: Uuid,
     pub name: String,
+    pub description: String,
     pub owner: String,
     pub owner_id: Uuid,
     pub is_public: bool,
@@ -27,6 +28,7 @@ pub struct PlaylistDetail {
 const PLAYLIST_COLUMNS: &str = "
     p.id,
     p.name,
+    p.description,
     u.username AS owner,
     p.owner_id,
     p.is_public,
@@ -141,17 +143,24 @@ pub async fn get(
     }))
 }
 
-pub async fn create(pool: &PgPool, owner_id: Uuid, name: &str, track_ids: &[Uuid]) -> Result<Uuid> {
+pub async fn create(
+    pool: &PgPool,
+    owner_id: Uuid,
+    name: &str,
+    description: &str,
+    track_ids: &[Uuid],
+) -> Result<Uuid> {
     let playlist_id = Uuid::now_v7();
     let mut transaction = pool
         .begin()
         .await
         .map_err(|error| db_error("begin playlist transaction", error))?;
 
-    sqlx::query("INSERT INTO playlists (id, owner_id, name) VALUES ($1, $2, $3)")
+    sqlx::query("INSERT INTO playlists (id, owner_id, name, description) VALUES ($1, $2, $3, $4)")
         .bind(playlist_id)
         .bind(owner_id)
         .bind(name)
+        .bind(description)
         .execute(&mut *transaction)
         .await
         .map_err(|error| db_error("create playlist", error))?;
@@ -170,6 +179,7 @@ pub async fn update(
     pool: &PgPool,
     playlist_id: Uuid,
     name: Option<&str>,
+    description: Option<&str>,
     is_public: Option<bool>,
     add: &[Uuid],
     remove: &[usize],
@@ -201,6 +211,15 @@ pub async fn update(
             .execute(&mut *transaction)
             .await
             .map_err(|error| db_error("rename playlist", error))?;
+    }
+
+    if let Some(description) = description {
+        sqlx::query("UPDATE playlists SET description = $2, updated_at = now() WHERE id = $1")
+            .bind(playlist_id)
+            .bind(description)
+            .execute(&mut *transaction)
+            .await
+            .map_err(|error| db_error("update playlist description", error))?;
     }
 
     if let Some(is_public) = is_public {
