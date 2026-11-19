@@ -6,6 +6,7 @@ pub mod artworks;
 pub mod audit;
 pub mod catalog;
 pub mod genres;
+pub mod history;
 pub mod libraries;
 pub mod media_files;
 pub mod permissions;

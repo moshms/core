@@ -95,7 +95,7 @@ pub struct ArtworkRecord {
     pub etag: String,
 }
 
-const TRACK_COLUMNS: &str = "
+pub(crate) const TRACK_COLUMNS: &str = "
     t.id,
     t.title,
     t.disc_no,
