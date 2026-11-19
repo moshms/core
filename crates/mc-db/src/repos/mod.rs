@@ -15,6 +15,7 @@ pub mod playlists;
 pub mod roles;
 pub mod scan_runs;
 pub mod sessions;
+pub mod stats;
 pub mod storages;
 pub mod tag_edits;
 pub mod tracks;
