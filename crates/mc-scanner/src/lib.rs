@@ -411,6 +411,7 @@ impl Scanner {
                 track_no: i32::try_from(metadata.track_no.unwrap_or(0)).unwrap_or(0),
                 year,
                 duration_ms: metadata.duration_ms,
+                lyrics: metadata.lyrics.as_deref(),
                 primary_file_id: file_id,
             },
         )

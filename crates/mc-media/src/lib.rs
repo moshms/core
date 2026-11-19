@@ -20,6 +20,7 @@ pub struct MediaMetadata {
     pub track_no: Option<u32>,
     pub disc_no: Option<u32>,
     pub genres: Vec<String>,
+    pub lyrics: Option<String>,
     pub duration_ms: Option<i64>,
     pub bitrate: Option<u32>,
     pub sample_rate: Option<u32>,
@@ -104,6 +105,11 @@ fn metadata_from_tagged(tagged: TaggedFile) -> MediaMetadata {
     genres.sort_by_key(|genre| genre.to_lowercase());
     genres.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
 
+    let lyrics = tag
+        .and_then(|tag| tag.get_string(ItemKey::Lyrics))
+        .map(str::to_owned)
+        .filter(|value| !value.trim().is_empty());
+
     let artwork = tag.and_then(|tag| {
         let picture = tag
             .pictures()
@@ -130,6 +136,7 @@ fn metadata_from_tagged(tagged: TaggedFile) -> MediaMetadata {
         track_no,
         disc_no,
         genres,
+        lyrics,
         duration_ms: Some(duration_ms(properties.duration())),
         bitrate: properties.audio_bitrate(),
         sample_rate: properties.sample_rate(),
