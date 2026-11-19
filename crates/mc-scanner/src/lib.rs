@@ -16,6 +16,8 @@ use serde::Serialize;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::{info, warn};
 
+const GLOBAL_SCAN_LOCK: i64 = 42424243;
+
 const UNKNOWN_ARTIST: &str = "Unknown Artist";
 const UNKNOWN_ALBUM: &str = "Unknown Album";
 
@@ -77,12 +79,32 @@ impl Scanner {
         let mut lock_connection = self.pool.acquire().await.map_err(|error| {
             mc_core::CoreError::Internal(format!("acquire scan connection: {error}"))
         })?;
+        let global_lock = if matches!(mode, ScanMode::Full) {
+            "SELECT pg_advisory_lock($1)"
+        } else {
+            "SELECT pg_advisory_lock_shared($1)"
+        };
+        sqlx::query(global_lock)
+            .bind(GLOBAL_SCAN_LOCK)
+            .execute(&mut *lock_connection)
+            .await
+            .map_err(|error| {
+                mc_core::CoreError::Internal(format!("acquire global scan lock: {error}"))
+            })?;
         let locked = sqlx::query_scalar::<_, bool>("SELECT pg_try_advisory_lock($1)")
             .bind(lock_key)
             .fetch_one(&mut *lock_connection)
             .await
             .map_err(|error| mc_core::CoreError::Internal(format!("acquire scan lock: {error}")))?;
         if !locked {
+            let _ = sqlx::query_scalar::<_, bool>("SELECT pg_advisory_unlock_shared($1)")
+                .bind(GLOBAL_SCAN_LOCK)
+                .fetch_one(&mut *lock_connection)
+                .await;
+            let _ = sqlx::query_scalar::<_, bool>("SELECT pg_advisory_unlock($1)")
+                .bind(GLOBAL_SCAN_LOCK)
+                .fetch_one(&mut *lock_connection)
+                .await;
             return Err(mc_core::CoreError::Conflict(
                 "library scan is already running".to_owned(),
             ));
@@ -94,6 +116,17 @@ impl Scanner {
             .bind(lock_key)
             .fetch_one(&mut *lock_connection)
             .await;
+        if matches!(mode, ScanMode::Full) {
+            let _ = sqlx::query_scalar::<_, bool>("SELECT pg_advisory_unlock($1)")
+                .bind(GLOBAL_SCAN_LOCK)
+                .fetch_one(&mut *lock_connection)
+                .await;
+        } else {
+            let _ = sqlx::query_scalar::<_, bool>("SELECT pg_advisory_unlock_shared($1)")
+                .bind(GLOBAL_SCAN_LOCK)
+                .fetch_one(&mut *lock_connection)
+                .await;
+        }
 
         match &result {
             Ok(stats) => {
@@ -307,6 +340,16 @@ impl Scanner {
             return Ok((metadata, content_hash));
         }
 
+        let meta = storage.stat(&entry.key).await?;
+        let head_size = meta.size.min(1024 * 1024);
+        if head_size > 0 {
+            if let Ok(head) = storage.read_range(&entry.key, 0..head_size).await {
+                if let Ok(metadata) = self.parser.parse(&head) {
+                    return Ok((metadata, meta.etag));
+                }
+            }
+        }
+
         let temporary = tempfile::Builder::new()
             .prefix("mc-scan-")
             .tempfile()
@@ -315,7 +358,6 @@ impl Scanner {
             tokio::fs::File::from_std(temporary.reopen().map_err(|error| {
                 CoreError::Unavailable(format!("open scan temp file: {error}"))
             })?);
-        let meta = storage.stat(&entry.key).await?;
         let mut hasher = blake3::Hasher::new();
         let mut offset = 0_u64;
         const CHUNK: u64 = 4 * 1024 * 1024;
