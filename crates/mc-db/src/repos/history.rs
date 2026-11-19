@@ -3,7 +3,7 @@ use serde::Serialize;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use super::catalog::TRACK_COLUMNS;
+use super::catalog::{TrackSummary, TRACK_COLUMNS};
 use super::db_error;
 
 #[derive(Clone, Debug, Serialize, sqlx::FromRow)]
@@ -87,4 +87,27 @@ pub async fn now_playing(
         .fetch_all(pool)
         .await
         .map_err(|error| db_error("list now playing", error))
+}
+
+impl From<&PlayHistoryEntry> for TrackSummary {
+    fn from(entry: &PlayHistoryEntry) -> Self {
+        Self {
+            id: entry.id,
+            title: entry.title.clone(),
+            disc_no: entry.disc_no,
+            track_no: entry.track_no,
+            duration_ms: entry.duration_ms,
+            artist: entry.artist.clone(),
+            album_id: entry.album_id,
+            album: entry.album.clone(),
+            album_artist: entry.album_artist.clone(),
+            album_artist_id: entry.album_artist_id,
+            album_year: entry.album_year,
+            file_key: entry.file_key.clone(),
+            size: entry.size,
+            format: entry.format.clone(),
+            library_id: entry.library_id,
+            uploaded_by: entry.uploaded_by,
+        }
+    }
 }
