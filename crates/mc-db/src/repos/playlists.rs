@@ -270,6 +270,55 @@ pub async fn update(
     Ok(true)
 }
 
+pub async fn reorder(pool: &PgPool, playlist_id: Uuid, track_ids: &[Uuid]) -> Result<bool> {
+    let mut transaction = pool
+        .begin()
+        .await
+        .map_err(|error| db_error("begin playlist reorder transaction", error))?;
+    let exists =
+        sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM playlists WHERE id = $1)")
+            .bind(playlist_id)
+            .fetch_one(&mut *transaction)
+            .await
+            .map_err(|error| db_error("check playlist", error))?;
+    if !exists {
+        return Ok(false);
+    }
+
+    let mut existing = sqlx::query_scalar::<_, Uuid>(
+        "SELECT track_id FROM playlist_entries WHERE playlist_id = $1 ORDER BY position",
+    )
+    .bind(playlist_id)
+    .fetch_all(&mut *transaction)
+    .await
+    .map_err(|error| db_error("load playlist entries", error))?;
+    let mut requested = track_ids.to_vec();
+    existing.sort();
+    requested.sort();
+    if existing != requested {
+        transaction
+            .rollback()
+            .await
+            .map_err(|error| db_error("rollback playlist reorder", error))?;
+        return Err(mc_core::CoreError::Validation(
+            "playlist order must contain exactly the current tracks".to_owned(),
+        ));
+    }
+
+    sqlx::query("DELETE FROM playlist_entries WHERE playlist_id = $1")
+        .bind(playlist_id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|error| db_error("clear playlist entries", error))?;
+    insert_tracks(&mut transaction, playlist_id, track_ids).await?;
+    transaction
+        .commit()
+        .await
+        .map_err(|error| db_error("commit playlist reorder", error))?;
+
+    Ok(true)
+}
+
 pub async fn delete(pool: &PgPool, playlist_id: Uuid) -> Result<bool> {
     let result = sqlx::query("DELETE FROM playlists WHERE id = $1")
         .bind(playlist_id)
