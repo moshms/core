@@ -85,3 +85,14 @@ pub async fn set_artists(pool: &PgPool, track_id: Uuid, artists: &[TrackArtist<'
         .await
         .map_err(|error| db_error("commit track artists transaction", error))
 }
+
+pub async fn set_lyrics(pool: &PgPool, track_id: Uuid, lyrics: &str) -> Result<bool> {
+    let result = sqlx::query("UPDATE tracks SET lyrics = $2, updated_at = now() WHERE id = $1")
+        .bind(track_id)
+        .bind(lyrics)
+        .execute(pool)
+        .await
+        .map_err(|error| db_error("update track lyrics", error))?;
+
+    Ok(result.rows_affected() > 0)
+}

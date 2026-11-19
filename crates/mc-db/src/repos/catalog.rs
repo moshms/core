@@ -79,6 +79,7 @@ pub struct TrackDetail {
 pub struct ArtistDetail {
     pub id: Uuid,
     pub name: String,
+    pub artwork_id: Option<Uuid>,
     pub albums: Vec<AlbumSummary>,
 }
 
@@ -412,8 +413,8 @@ pub async fn get_artist(
     artist_id: Uuid,
     visible: &[Uuid],
 ) -> Result<Option<ArtistDetail>> {
-    let artist = sqlx::query_as::<_, (Uuid, String)>(
-        "SELECT ar.id, ar.name
+    let artist = sqlx::query_as::<_, (Uuid, String, Option<Uuid>)>(
+        "SELECT ar.id, ar.name, ar.artwork_id
          FROM artists ar
          WHERE ar.id = $1
            AND EXISTS (
@@ -432,12 +433,17 @@ pub async fn get_artist(
     .await
     .map_err(|error| db_error("load artist", error))?;
 
-    let Some((id, name)) = artist else {
+    let Some((id, name, artwork_id)) = artist else {
         return Ok(None);
     };
 
     let albums = list_albums(pool, Some(artist_id), visible).await?;
-    Ok(Some(ArtistDetail { id, name, albums }))
+    Ok(Some(ArtistDetail {
+        id,
+        name,
+        artwork_id,
+        albums,
+    }))
 }
 
 pub async fn get_album(
@@ -690,6 +696,44 @@ pub async fn search(
         albums,
         tracks,
     })
+}
+
+pub async fn get_artist_artwork(
+    pool: &PgPool,
+    artist_id: Uuid,
+    visible: &[Uuid],
+) -> Result<Option<ArtworkRecord>> {
+    sqlx::query_as::<_, ArtworkRecord>(
+        "SELECT aw.mime, aw.data, aw.hash AS etag
+         FROM artists ar
+         JOIN artworks aw ON aw.id = COALESCE(
+             ar.artwork_id,
+             (SELECT al.artwork_id
+              FROM albums al
+              JOIN tracks t ON t.album_id = al.id
+              JOIN media_files mf ON mf.id = t.primary_file_id
+              WHERE al.album_artist_id = ar.id
+                AND al.artwork_id IS NOT NULL
+                AND mf.library_id = ANY($1)
+                AND mf.scan_state = 'indexed'
+              LIMIT 1)
+         )
+         WHERE ar.id = $2
+           AND EXISTS (
+               SELECT 1
+               FROM albums al
+               JOIN tracks t ON t.album_id = al.id
+               JOIN media_files mf ON mf.id = t.primary_file_id
+               WHERE al.album_artist_id = ar.id
+                 AND mf.library_id = ANY($1)
+                 AND mf.scan_state = 'indexed'
+           )",
+    )
+    .bind(visible)
+    .bind(artist_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|error| db_error("load artist artwork", error))
 }
 
 pub async fn get_album_artwork(

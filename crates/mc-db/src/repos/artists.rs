@@ -30,3 +30,15 @@ pub async fn delete_empty(pool: &PgPool) -> Result<u64> {
 
     Ok(result.rows_affected())
 }
+
+pub async fn set_artwork(pool: &PgPool, artist_id: Uuid, artwork_id: Option<Uuid>) -> Result<bool> {
+    let result =
+        sqlx::query("UPDATE artists SET artwork_id = $2, updated_at = now() WHERE id = $1")
+            .bind(artist_id)
+            .bind(artwork_id)
+            .execute(pool)
+            .await
+            .map_err(|error| db_error("update artist artwork", error))?;
+
+    Ok(result.rows_affected() > 0)
+}
