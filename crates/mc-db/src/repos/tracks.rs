@@ -12,6 +12,7 @@ pub struct NewTrack<'a> {
     pub track_no: i32,
     pub year: i32,
     pub duration_ms: Option<i64>,
+    pub lyrics: Option<&'a str>,
     pub primary_file_id: Uuid,
 }
 
@@ -25,8 +26,8 @@ pub struct TrackArtist<'a> {
 pub async fn upsert(pool: &PgPool, track: &NewTrack<'_>) -> Result<Uuid> {
     sqlx::query_scalar::<_, Uuid>(
         "INSERT INTO tracks
-             (id, title, album_id, disc_no, track_no, year, duration_ms, primary_file_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+             (id, title, album_id, disc_no, track_no, year, duration_ms, lyrics, primary_file_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
          ON CONFLICT (primary_file_id) DO UPDATE SET
              title = EXCLUDED.title,
              album_id = EXCLUDED.album_id,
@@ -34,6 +35,7 @@ pub async fn upsert(pool: &PgPool, track: &NewTrack<'_>) -> Result<Uuid> {
              track_no = EXCLUDED.track_no,
              year = EXCLUDED.year,
              duration_ms = EXCLUDED.duration_ms,
+             lyrics = EXCLUDED.lyrics,
              updated_at = now()
          RETURNING id",
     )
@@ -44,6 +46,7 @@ pub async fn upsert(pool: &PgPool, track: &NewTrack<'_>) -> Result<Uuid> {
     .bind(track.track_no)
     .bind(track.year)
     .bind(track.duration_ms)
+    .bind(track.lyrics)
     .bind(track.primary_file_id)
     .fetch_one(pool)
     .await

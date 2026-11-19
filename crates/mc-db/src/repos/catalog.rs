@@ -72,6 +72,7 @@ pub struct TrackDetail {
     pub bitrate: Option<i32>,
     pub sample_rate: Option<i32>,
     pub uploaded_by: Option<Uuid>,
+    pub lyrics: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -533,7 +534,8 @@ pub async fn get_track(
              mf.format,
              mf.bitrate,
              mf.sample_rate,
-             mf.uploaded_by
+             mf.uploaded_by,
+             t.lyrics
          FROM tracks t
          JOIN media_files mf ON mf.id = t.primary_file_id
          LEFT JOIN albums al ON al.id = t.album_id
